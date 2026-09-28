@@ -193,64 +193,154 @@ function extraerSaldo(data) {
 // ======================================================
 
 async function verificarJugadorFreeFire(userid) {
-  const url =
-    "https://freefireapis.lat/info-player" +
-    `?uid=${encodeURIComponent(userid)}` +
-    "&region=BR";
+  const uid = encodeURIComponent(userid);
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      "Accept": "application/json"
-    }
-  });
-
-  let data;
-
+  // 1) Verificador gratuito principal
   try {
-    data = await response.json();
-  } catch {
-    data = {};
+    const response = await fetch(
+      "https://freefireapis.lat/info-player?uid=" + uid + "&region=SAC",
+      {
+        method: "GET",
+        headers: { "Accept": "application/json" }
+      }
+    );
+
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+
+    const basicInfo =
+      data?.resultado?.basicInfo ??
+      data?.result?.basicInfo ??
+      data?.basicInfo ??
+      null;
+
+    const nickname =
+      basicInfo?.nickname ??
+      data?.resultado?.nickname ??
+      data?.nickname ??
+      null;
+
+    const accountId =
+      basicInfo?.accountId ??
+      data?.resultado?.accountId ??
+      data?.accountId ??
+      null;
+
+    const error =
+      data?.error ??
+      data?.message ??
+      null;
+
+    const noEncontrado =
+      response.status === 404 &&
+      (
+        String(error || "").toUpperCase().includes("PLAYER_NOT_FOUND") ||
+        String(error || "").toLowerCase().includes("not found")
+      );
+
+    if (noEncontrado) {
+      return {
+        ok: true,
+        encontrado: false,
+        status: 404,
+        nickname: null,
+        accountId: null,
+        data
+      };
+    }
+
+    if (
+      response.ok &&
+      data?.success !== false &&
+      data?.exito !== false &&
+      nickname
+    ) {
+      return {
+        ok: true,
+        encontrado: true,
+        status: response.status,
+        nickname,
+        accountId,
+        data
+      };
+    }
+  } catch (error) {
+    console.error("Verificador principal Free Fire:", error);
   }
 
-  const basicInfo =
-    data?.resultado?.basicInfo ??
-    data?.result?.basicInfo ??
-    data?.basicInfo ??
-    null;
+  // 2) Respaldo Volsever
+  if (!process.env.VOLSEVER_API_KEY) {
+    throw new Error("No hay verificador de respaldo disponible");
+  }
+
+  const respaldo = await fetch(
+    "https://gate.volsever.com/garena/api/v1/pagostore/free-fire/check-products" +
+    "?id=" + uid +
+    "&region=SAC",
+    {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "X-API-Key": process.env.VOLSEVER_API_KEY
+      }
+    }
+  );
+
+  let dataRespaldo;
+  try {
+    dataRespaldo = await respaldo.json();
+  } catch {
+    dataRespaldo = {};
+  }
+
+  if (
+    respaldo.status === 404 ||
+    (
+      dataRespaldo?.status === false &&
+      Number(dataRespaldo?.code) === 404
+    )
+  ) {
+    return {
+      ok: true,
+      encontrado: false,
+      status: 404,
+      nickname: null,
+      accountId: null,
+      data: dataRespaldo
+    };
+  }
 
   const nickname =
-    basicInfo?.nickname ??
-    data?.resultado?.nickname ??
-    data?.nickname ??
+    dataRespaldo?.data?.username ??
+    dataRespaldo?.username ??
     null;
 
-  const accountId =
-    basicInfo?.accountId ??
-    data?.resultado?.accountId ??
-    data?.accountId ??
-    null;
+  if (
+    respaldo.ok &&
+    dataRespaldo?.status !== false &&
+    nickname
+  ) {
+    return {
+      ok: true,
+      encontrado: true,
+      status: respaldo.status,
+      nickname,
+      accountId:
+        dataRespaldo?.data?.user_id ??
+        dataRespaldo?.user_id ??
+        userid,
+      data: dataRespaldo
+    };
+  }
 
-  const error =
-    data?.error ??
-    data?.message ??
-    null;
-
-  const encontrado =
-    response.ok &&
-    data?.success !== false &&
-    data?.exito !== false &&
-    String(error || "").toUpperCase() !== "PLAYER_NOT_FOUND" &&
-    Boolean(nickname);
-
-  return {
-    ok: response.ok,
-    encontrado,
-    status: response.status,
-    nickname,
-    accountId,
-    data
-  };
+  throw new Error(
+    dataRespaldo?.message ||
+    "Los verificadores de Free Fire no respondieron correctamente"
+  );
 }
 // ======================================================
 // PROMOS RD - VOLSEVER
