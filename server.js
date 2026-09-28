@@ -189,6 +189,71 @@ function extraerSaldo(data) {
 }
 
 // ======================================================
+// VERIFICAR JUGADOR FREE FIRE
+// ======================================================
+
+async function verificarJugadorFreeFire(userid) {
+  const url =
+    "https://freefireapis.lat/info-player" +
+    `?uid=${encodeURIComponent(userid)}` +
+    "&region=BR";
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  const basicInfo =
+    data?.resultado?.basicInfo ??
+    data?.result?.basicInfo ??
+    data?.basicInfo ??
+    null;
+
+  const nickname =
+    basicInfo?.nickname ??
+    data?.resultado?.nickname ??
+    data?.nickname ??
+    null;
+
+  const accountId =
+    basicInfo?.accountId ??
+    data?.resultado?.accountId ??
+    data?.accountId ??
+    null;
+
+  const error =
+    data?.error ??
+    data?.message ??
+    null;
+
+  const encontrado =
+    response.ok &&
+    data?.success !== false &&
+    data?.exito !== false &&
+    String(error || "").toUpperCase() !== "PLAYER_NOT_FOUND" &&
+    Boolean(nickname);
+
+  return {
+    ok: response.ok,
+    encontrado,
+    status: response.status,
+    nickname,
+    accountId,
+    data
+  };
+}
+
+// ======================================================
 // RASTREAR ORDEN
 // ======================================================
 
@@ -366,9 +431,7 @@ async function crearRecarga(order) {
     data,
     partner_orderid
   };
-}
-
-// ======================================================
+}// ======================================================
 // TECLADOS
 // ======================================================
 
@@ -706,7 +769,10 @@ async function cargarProductos(
     const titulo =
       paraRecarga
         ? "💎 NUEVA RECARGA\n\n" +
-          `🆔 ID: ${session.userid}\n\n` +
+          `🆔 ID: ${session.userid}\n` +
+          (session.nickname
+            ? `👤 Nombre: ${session.nickname}\n\n`
+            : "\n") +
           "Elegí un producto:"
         : "📦 PRODUCTOS\n\n" +
           "Free Fire LATAM\n\n" +
@@ -850,24 +916,150 @@ app.post(
             text;
 
           session.estado =
-            "eligiendo_producto";
+            "verificando_jugador";
 
           sessions.set(
             String(chatId),
             session
           );
 
-          await cargarProductos(
+          await editarMensaje(
             chatId,
-            session
-              .panelMessageId,
-            true
+            session.panelMessageId,
+            "🔎 VERIFICANDO JUGADOR\n\n" +
+            `🆔 ID: ${session.userid}\n\n` +
+            "Buscando la cuenta de Free Fire..."
           );
 
-          return;
-        }
+          try {
+            const jugador =
+              await verificarJugadorFreeFire(
+                session.userid
+              );
 
-        // ESPERANDO ORDEN
+            if (!jugador.encontrado) {
+              session.estado =
+                "esperando_id";
+
+              session.nickname =
+                null;
+
+              sessions.set(
+                String(chatId),
+                session
+              );
+
+              await editarMensaje(
+                chatId,
+                session.panelMessageId,
+                "❌ JUGADOR NO ENCONTRADO\n\n" +
+                `🆔 ID: ${session.userid}\n\n` +
+                "No se encontró una cuenta de Free Fire con ese ID.\n\n" +
+                "Revisalo y escribí el ID nuevamente:",
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text:
+                          "❌ Cancelar",
+                        callback_data:
+                          "cancelar"
+                      }
+                    ]
+                  ]
+                }
+              );
+
+              return;
+            }
+
+            session.nickname =
+              jugador.nickname;
+
+            session.estado =
+              "jugador_confirmado";
+
+            sessions.set(
+              String(chatId),
+              session
+            );
+
+            await editarMensaje(
+              chatId,
+              session.panelMessageId,
+              "✅ JUGADOR ENCONTRADO\n\n" +
+              `🆔 ID: ${session.userid}\n` +
+              `👤 Nombre: ${session.nickname}\n\n` +
+              "¿Es la cuenta correcta?",
+              {
+                inline_keyboard: [
+                  [
+                    {
+                      text:
+                        "✅ Sí, continuar",
+                      callback_data:
+                        "jugador_ok"
+                    }
+                  ],
+                  [
+                    {
+                      text:
+                        "✏️ Cambiar ID",
+                      callback_data:
+                        "cambiar_id"
+                    }
+                  ],
+                  [
+                    {
+                      text:
+                        "❌ Cancelar",
+                      callback_data:
+                        "cancelar"
+                    }
+                  ]
+                ]
+              }
+            );
+
+          } catch (error) {
+            console.error(
+              "Error verificando jugador:",
+              error
+            );
+
+            session.estado =
+              "esperando_id";
+
+            sessions.set(
+              String(chatId),
+              session
+            );
+
+            await editarMensaje(
+              chatId,
+              session.panelMessageId,
+              "⚠️ NO SE PUDO VERIFICAR EL JUGADOR\n\n" +
+              `🆔 ID: ${session.userid}\n\n` +
+              "El servicio de verificación no respondió.\n" +
+              "La recarga NO fue enviada.\n\n" +
+              "Podés escribir el ID nuevamente o cancelar.",
+              {
+                inline_keyboard: [
+                  [
+                    {
+                      text:
+                        "❌ Cancelar",
+                      callback_data:
+                        "cancelar"
+                    }
+                  ]
+                ]
+              }
+            );
+          }
+
+          return;
+        }        // ESPERANDO ORDEN
         if (
           session?.estado ===
           "esperando_orden"
@@ -1037,6 +1229,94 @@ app.post(
           return;
         }
 
+        // JUGADOR CONFIRMADO
+        if (
+          data === "jugador_ok"
+        ) {
+          session =
+            sessions.get(
+              String(chatId)
+            );
+
+          if (
+            !session?.userid ||
+            !session?.nickname ||
+            session.estado !==
+              "jugador_confirmado"
+          ) {
+            await mostrarMenu(
+              chatId,
+              messageId
+            );
+
+            return;
+          }
+
+          session.estado =
+            "eligiendo_producto";
+
+          sessions.set(
+            String(chatId),
+            session
+          );
+
+          await cargarProductos(
+            chatId,
+            messageId,
+            true
+          );
+
+          return;
+        }
+
+        // CAMBIAR ID
+        if (
+          data === "cambiar_id"
+        ) {
+          session =
+            sessions.get(
+              String(chatId)
+            ) || {};
+
+          session.userid =
+            null;
+
+          session.nickname =
+            null;
+
+          session.estado =
+            "esperando_id";
+
+          session.panelMessageId =
+            messageId;
+
+          sessions.set(
+            String(chatId),
+            session
+          );
+
+          await editarMensaje(
+            chatId,
+            messageId,
+            "💎 NUEVA RECARGA\n\n" +
+            "Escribí el ID de Free Fire del jugador:",
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text:
+                      "❌ Cancelar",
+                    callback_data:
+                      "cancelar"
+                  }
+                ]
+              ]
+            }
+          );
+
+          return;
+        }
+
         // RASTREAR
         if (
           data === "rastrear"
@@ -1064,7 +1344,8 @@ app.post(
               inline_keyboard: [
                 [
                   {
-                    text:                      "❌ Cancelar",
+                    text:
+                      "❌ Cancelar",
                     callback_data:
                       "cancelar"
                   }
@@ -1294,6 +1575,9 @@ app.post(
               messageId,
               "⏳ PREPARANDO RECARGA\n\n" +
               `🆔 ID: ${session.userid}\n` +
+              (session.nickname
+                ? `👤 Nombre: ${session.nickname}\n`
+                : "") +
               `💎 Producto: ${producto.name}\n\n` +
               "Consultando saldo actual..."
             );
@@ -1332,6 +1616,9 @@ app.post(
                   messageId,
                   "⚠️ NO SE PUDO CONSULTAR EL SALDO\n\n" +
                   `🆔 ID: ${session.userid}\n` +
+                  (session.nickname
+                    ? `👤 Nombre: ${session.nickname}\n`
+                    : "") +
                   `💎 Producto: ${producto.name}\n` +
                   `💵 Costo: $${producto.price}\n\n` +
                   "Por seguridad no se habilitó la confirmación.",
@@ -1406,6 +1693,9 @@ app.post(
                   "⚠️ SALDO INSUFICIENTE\n\n" +
                   "🎮 Free Fire LATAM\n" +
                   `🆔 ID: ${session.userid}\n` +
+                  (session.nickname
+                    ? `👤 Nombre: ${session.nickname}\n`
+                    : "") +
                   `💎 Producto: ${producto.name}\n` +
                   `💵 Costo: $${costo.toFixed(3)}\n\n` +
                   `💰 Saldo actual: $${saldo.toFixed(3)}\n` +
@@ -1434,9 +1724,7 @@ app.post(
                 );
 
                 return;
-              }
-
-              // ========================================
+              }              // ========================================
               // SALDO SUFICIENTE
               // ========================================
 
@@ -1446,6 +1734,9 @@ app.post(
                 "💎 CONFIRMAR RECARGA\n\n" +
                 "🎮 Free Fire LATAM\n" +
                 `🆔 ID: ${session.userid}\n` +
+                (session.nickname
+                  ? `👤 Nombre: ${session.nickname}\n`
+                  : "") +
                 `💎 Producto: ${producto.name}\n` +
                 `💵 Costo: $${costo.toFixed(3)}\n\n` +
                 `💰 Saldo actual: $${saldo.toFixed(3)}\n` +
@@ -1771,6 +2062,9 @@ app.post(
             messageId,
             "⏳ PROCESANDO RECARGA\n\n" +
             `🆔 ${order.userid}\n` +
+            (session.nickname
+              ? `👤 ${session.nickname}\n`
+              : "") +
             `💎 ${order.cantidad}\n\n` +
             "Enviando pedido a GoXTop...\n" +
             "No cierres ni repitas la operación."
@@ -1790,6 +2084,9 @@ app.post(
                 result
                   .partner_orderid;
 
+              const nickname =
+                session.nickname;
+
               sessions.set(
                 String(chatId),
                 {
@@ -1806,6 +2103,9 @@ app.post(
                 messageId,
                 "✅ PEDIDO ACEPTADO\n\n" +
                 `🆔 ID: ${order.userid}\n` +
+                (nickname
+                  ? `👤 Nombre: ${nickname}\n`
+                  : "") +
                 `💎 Producto: ${order.cantidad}\n` +
                 `💵 Costo: $${order.price}\n\n` +
                 "📦 Orden:\n" +
@@ -1865,7 +2165,7 @@ app.post(
               String(chatId),
               {
                 panelMessageId:
-                    messageId,
+                  messageId,
                 estado: "menu"
               }
             );
@@ -1901,10 +2201,7 @@ app.post(
         error
       );
     }
-  }
-);
-
-// ======================================================
+  }// ======================================================
 // WEBHOOK GOXTOP
 // ======================================================
 
@@ -2040,3 +2337,4 @@ app.listen(PORT, () => {
     `JS Recargas ejecutándose en puerto ${PORT}`
   );
 });
+);
