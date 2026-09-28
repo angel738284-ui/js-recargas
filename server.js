@@ -17,6 +17,12 @@ let saldoBajoAvisado = false;
 // Se conserva mientras el proceso de Render siga encendido.
 const ventasDiarias = [];
 
+// Modo mantenimiento: bloquea nuevas recargas sin apagar el bot.
+let modoMantenimiento = false;
+
+// Evita avisos repetidos si GoXTop reenvía el mismo estado.
+const estadosWebhookNotificados = new Map();
+
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString("utf8");
@@ -913,6 +919,20 @@ function tecladoPrincipal() {
         {
           text: "📊 Resumen del día",
           callback_data: "resumen_dia"
+        }
+      ],
+      [
+        {
+          text: "🧪 Diagnóstico",
+          callback_data: "diagnostico"
+        },
+        {
+          text:
+            modoMantenimiento
+              ? "🛠 Mantenimiento: ON"
+              : "🛠 Mantenimiento: OFF",
+          callback_data:
+            "toggle_mantenimiento"
         }
       ]
     ]
@@ -2069,8 +2089,130 @@ if (
 
   return;
 }
+        // DIAGNÓSTICO
+        if (data === "diagnostico") {
+          await editarMensaje(
+            chatId,
+            messageId,
+            "🧪 DIAGNÓSTICO\n\n" +
+            "Revisando servicios..."
+          );
+
+          const estado = [];
+
+          try {
+            const tg =
+              await telegram(
+                "getMe",
+                {}
+              );
+
+            estado.push(
+              tg?.ok
+                ? "✅ Telegram: OK"
+                : "❌ Telegram: error"
+            );
+          } catch {
+            estado.push(
+              "❌ Telegram: sin respuesta"
+            );
+          }
+
+          try {
+            const saldoResult =
+              await obtenerSaldo();
+
+            const saldo =
+              extraerSaldo(
+                saldoResult.data
+              );
+
+            if (
+              saldoResult.ok &&
+              saldo !== null
+            ) {
+              estado.push(
+                `✅ GoXTop: OK · saldo ${saldo.toFixed(3)} USD`
+              );
+            } else {
+              estado.push(
+                "❌ GoXTop: error consultando saldo"
+              );
+            }
+          } catch {
+            estado.push(
+              "❌ GoXTop: sin respuesta"
+            );
+          }
+
+          estado.push(
+            process.env.VOLSEVER_API_KEY
+              ? "✅ Volsever: API key configurada"
+              : "❌ Volsever: falta API key"
+          );
+
+          estado.push(
+            modoMantenimiento
+              ? "🛠 Mantenimiento: ACTIVADO"
+              : "✅ Mantenimiento: desactivado"
+          );
+
+          await editarMensaje(
+            chatId,
+            messageId,
+            "🧪 DIAGNÓSTICO\n\n" +
+            estado.join("\n") +
+            "\n\nℹ️ Volsever no se consulta en vivo para no gastar tu cupo.",
+            tecladoVolver()
+          );
+
+          return;
+        }
+
+        // MODO MANTENIMIENTO
+        if (
+          data ===
+          "toggle_mantenimiento"
+        ) {
+          modoMantenimiento =
+            !modoMantenimiento;
+
+          sessions.set(
+            String(chatId),
+            {
+              panelMessageId:
+                messageId,
+              estado: "menu"
+            }
+          );
+
+          await editarMensaje(
+            chatId,
+            messageId,
+            modoMantenimiento
+              ? "🛠 MANTENIMIENTO ACTIVADO\n\nLas nuevas recargas quedaron bloqueadas."
+              : "✅ MANTENIMIENTO DESACTIVADO\n\nLas nuevas recargas vuelven a estar habilitadas.",
+            tecladoPrincipal()
+          );
+
+          return;
+        }
+
         // NUEVA RECARGA
         if (data === "nueva") {
+          if (modoMantenimiento) {
+            await editarMensaje(
+              chatId,
+              messageId,
+              "🛠 MODO MANTENIMIENTO\n\n" +
+              "Las nuevas recargas están temporalmente bloqueadas.\n\n" +
+              "Podés seguir consultando saldo, productos, promos y órdenes.",
+              tecladoVolver()
+            );
+
+            return;
+          }
+
           session = {
             panelMessageId:
               messageId,
@@ -2777,6 +2919,27 @@ if (
             return;
           }
 
+          if (modoMantenimiento) {
+            session.estado =
+              "menu";
+
+            sessions.set(
+              String(chatId),
+              session
+            );
+
+            await editarMensaje(
+              chatId,
+              messageId,
+              "🛠 MODO MANTENIMIENTO\n\n" +
+              "La recarga NO fue enviada.\n" +
+              "Desactivá mantenimiento para volver a operar.",
+              tecladoVolver()
+            );
+
+            return;
+          }
+
           if (
             !confirmacionExtra &&
             esRecargaCara(
@@ -3191,7 +3354,7 @@ if (
 
 app.post(
   "/webhook/order-status",
-  (req, res) => {
+  async (req, res) => {
     const timestamp =
       req.get(
         "X-Webhook-Timestamp"
@@ -3260,6 +3423,142 @@ app.post(
       "Webhook GoXTop:",
       req.body
     );
+
+    const payload =
+      req.body?.data ??
+      req.body ??
+      {};
+
+    const orderId =
+      payload.partner_orderid ??
+      payload.partnerOrderId ??
+      payload.order_id ??
+      payload.orderId ??
+      "Orden desconocida";
+
+    const statusRaw =
+      payload.status ??
+      payload.order_status ??
+      payload.orderStatus ??
+      payload.state ??
+      "UNKNOWN";
+
+    const status =
+      String(
+        statusRaw
+      ).toUpperCase();
+
+    const userid =
+      payload.userid ??
+      payload.user_id ??
+      payload.player_id ??
+      null;
+
+    const producto =
+      payload.denom ??
+      payload.product ??
+      payload.product_name ??
+      null;
+
+    const claveAviso =
+      `${orderId}:${status}`;
+
+    if (
+      !estadosWebhookNotificados.has(
+        claveAviso
+      )
+    ) {
+      estadosWebhookNotificados.set(
+        claveAviso,
+        Date.now()
+      );
+
+      if (
+        estadosWebhookNotificados.size >
+        300
+      ) {
+        const primeraClave =
+          estadosWebhookNotificados
+            .keys()
+            .next()
+            .value;
+
+        estadosWebhookNotificados.delete(
+          primeraClave
+        );
+      }
+
+      let icono = "🔔";
+      let titulo =
+        "ACTUALIZACIÓN DE ORDEN";
+
+      if (
+        [
+          "SUCCESS",
+          "COMPLETED",
+          "COMPLETE",
+          "SUCCESSFUL"
+        ].includes(status)
+      ) {
+        icono = "✅";
+        titulo =
+          "RECARGA COMPLETADA";
+      } else if (
+        [
+          "FAILED",
+          "FAIL",
+          "CANCELLED",
+          "CANCELED",
+          "REJECTED"
+        ].includes(status)
+      ) {
+        icono = "❌";
+        titulo =
+          "RECARGA FALLIDA";
+      } else if (
+        [
+          "PENDING",
+          "PROCESSING",
+          "IN_PROGRESS",
+          "QUEUED"
+        ].includes(status)
+      ) {
+        icono = "⏳";
+        titulo =
+          "RECARGA EN PROCESO";
+      }
+
+      let aviso =
+        `${icono} ${titulo}\n\n` +
+        `📦 Orden: ${orderId}\n` +
+        `📡 Estado: ${statusRaw}`;
+
+      if (userid) {
+        aviso +=
+          `\n🆔 ID: ${userid}`;
+      }
+
+      if (producto) {
+        aviso +=
+          `\n💎 Producto: ${producto}`;
+      }
+
+      try {
+        await enviarMensaje(
+          ADMIN_TELEGRAM_ID,
+          aviso,
+          orderId !==
+            "Orden desconocida"
+            ? tecladoOrden(orderId)
+            : null
+        );
+      } catch (error) {
+        console.error(
+          "Error aviso webhook:",
+          error
+        );
+      }
+    }
 
     return res.json({
       success: true
