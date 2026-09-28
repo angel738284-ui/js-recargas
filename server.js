@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const app = express();
 
 app.use(cors());
@@ -134,7 +135,40 @@ app.post("/webhook/order-status", (req, res) => {
 
   return res.status(200).json({ success: true });
 });
+// Recibir mensajes del bot de Telegram
+app.post("/telegram/webhook", async (req, res) => {
+  try {
+    const message = req.body.message;
 
+    if (!message || !message.chat) {
+      return res.sendStatus(200);
+    }
+
+    const chatId = message.chat.id;
+    const text = message.text || "";
+
+    if (text === "/start") {
+      await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: "✅ JS Recargas conectado correctamente."
+          })
+        }
+      );
+    }
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("Error Telegram:", error);
+    return res.sendStatus(200);
+  }
+});
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
