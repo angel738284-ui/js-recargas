@@ -2339,4 +2339,3 @@ app.listen(PORT, () => {
     `JS Recargas ejecutándose en puerto ${PORT}`
   );
 });
-);
