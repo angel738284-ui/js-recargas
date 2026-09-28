@@ -389,9 +389,50 @@ function extraerPromosRD(data) {
     return [];
   }
 
-  return items.filter(
-    item => item?.is_discount === true
-  );
+  return items;
+}
+
+const PRECIOS_PROMO_RD = {
+  110: 1300,
+  341: 3600,
+  572: 6200,
+  1166: 12500,
+  2398: 24000,
+  5600: 53500
+};
+
+const PRECIOS_NORMAL_RD = {
+  110: 1500,
+  341: 4500,
+  572: 8400,
+  1166: 15000,
+  2398: 25000,
+  5600: 60000
+};
+
+const PAQUETES_PROMO_RD = [
+  110,
+  341,
+  572,
+  1166,
+  2398,
+  5600
+];
+
+function paquetePromoRD(item) {
+  const diamantes = Number(item?.diamonds || 0);
+  const bonus = Number(item?.bonus_diamonds || 0);
+  const total = diamantes + bonus;
+
+  if (diamantes === 5600 || total === 6160) {
+    return 5600;
+  }
+
+  return total || diamantes;
+}
+
+function precioPesos(valor) {
+  return "$" + Number(valor || 0).toLocaleString("es-AR");
 }
 // ======================================================
 // RASTREAR ORDEN
@@ -957,7 +998,6 @@ app.post(
   "/telegram/webhook",
   async (req, res) => {
     res.sendStatus(200);
-
     try {
 
       // ================================================
@@ -1099,38 +1139,56 @@ if (session?.estado === "esperando_id_promos") {
         resultado.data
       );
 
+    const promosActivas =
+      new Set(
+        promos
+          .filter(
+            item =>
+              item?.is_discount === true
+          )
+          .map(paquetePromoRD)
+      );
+
     const nombre =
       resultado.data?.data?.username ??
       resultado.data?.username ??
       null;
 
     let salida =
-      "🇩🇴 PROMOS DISPONIBLES\n\n" +
+      "🇩🇴 ESTADO DE PROMOS\n\n" +
       (nombre
         ? `👤 ${nombre}\n`
         : "") +
       `🆔 ID: ${text}\n\n`;
 
-    if (!promos.length) {
-      salida +=
-        "❌ Este ID no tiene promos disponibles.";
-    } else {
-      salida += promos.map(item => {
-        const diamantes =
-          Number(item.diamonds || 0);
+    salida +=
+      PAQUETES_PROMO_RD
+        .map(paquete => {
+          const activa =
+            promosActivas.has(
+              paquete
+            );
 
-        const bonus =
-          Number(item.bonus_diamonds || 0);
+          const precio =
+            activa
+              ? PRECIOS_PROMO_RD[
+                  paquete
+                ]
+              : PRECIOS_NORMAL_RD[
+                  paquete
+                ];
 
-        const total =
-          diamantes + bonus;
-
-        return (
-          `💎 Promo ${total || diamantes}` +
-          " — ✅ Disponible"
-        );
-      }).join("\n");
-    }
+          return (
+            `💎 ${paquete} — ` +
+            (
+              activa
+                ? "✅ Promo activa"
+                : "❌ Sin promo"
+            ) +
+            ` — ${precioPesos(precio)}`
+          );
+        })
+        .join("\n");
 
     session.estado = "menu";
 
