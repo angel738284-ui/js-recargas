@@ -1,10 +1,14 @@
 const express = require("express");
 const cors = require("cors");
-
+const crypto = require("crypto");
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString("utf8");
+  }
+}));
 
 const GOXTOP_BASE_URL = "https://goxtop.com/api/v.1";
 
@@ -108,6 +112,28 @@ app.post("/api/create-order", async (req, res) => {
   }
 });
 
+// Recibir actualizaciones de pedidos desde GoXTop
+app.post("/webhook/order-status", (req, res) => {
+  const timestamp = req.get("X-Webhook-Timestamp");
+  const signature = req.get("X-Webhook-Signature");
+
+  if (!timestamp || !signature || !process.env.SECRET_KEY) {
+    return res.status(401).json({ success: false });
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", process.env.SECRET_KEY)
+    .update(timestamp + "." + req.rawBody)
+    .digest("hex");
+
+  if (signature !== expectedSignature) {
+    return res.status(401).json({ success: false });
+  }
+
+  console.log("Webhook GoXTop:", req.body);
+
+  return res.status(200).json({ success: true });
+});
 
 const PORT = process.env.PORT || 3000;
 
