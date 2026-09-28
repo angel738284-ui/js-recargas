@@ -262,7 +262,7 @@ async function consultarPromosRD(userid) {
   }
 
   const url =
-    "https://api.volsever.com/garena/api/v1/pagostore/free-fire/check-discounts-paypal-dom" +
+    "https://gate.volsever.com/garena/api/v1/pagostore/free-fire/check-discounts-paypal-dom" +
     "?id=" +
     encodeURIComponent(userid);
 
