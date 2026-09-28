@@ -901,6 +901,16 @@ function tecladoPrincipal() {
       ],
       [
         {
+          text: "💵 Sin promos",
+          callback_data: "precios_sin_promo"
+        },
+        {
+          text: "🔥 Con promos",
+          callback_data: "precios_con_promo"
+        }
+      ],
+      [
+        {
           text: "🔎 Rastrear orden",
           callback_data: "rastrear"
         }
@@ -1877,6 +1887,60 @@ if (session?.estado === "esperando_id_promos") {
 
           return;
         }
+// PRECIOS SIN PROMOS
+if (data === "precios_sin_promo") {
+  const salida =
+    "💵 PRECIOS SIN PROMOS\n\n" +
+    PAQUETES_PROMO_RD
+      .map(paquete => {
+        const precio =
+          PRECIOS_NORMAL_RD[
+            paquete
+          ];
+
+        return (
+          `💎 ${paquete} — ${precioPesos(precio)}`
+        );
+      })
+      .join("\n");
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    salida,
+    tecladoVolver()
+  );
+
+  return;
+}
+
+// PRECIOS CON PROMOS
+if (data === "precios_con_promo") {
+  const salida =
+    "🔥 PRECIOS CON PROMOS\n\n" +
+    PAQUETES_PROMO_RD
+      .map(paquete => {
+        const precio =
+          PRECIOS_PROMO_RD[
+            paquete
+          ];
+
+        return (
+          `💎 ${paquete} — ${precioPesos(precio)}`
+        );
+      })
+      .join("\n");
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    salida,
+    tecladoVolver()
+  );
+
+  return;
+}
+
 // CONSULTAR PROMOS RD
 if (data === "promos_rd") {
   session = {
