@@ -124,10 +124,18 @@ async function obtenerSaldo() {
     }
   );
 
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
   return {
     ok: response.ok,
     status: response.status,
-    data: await response.json()
+    data
   };
 }
 
@@ -141,21 +149,47 @@ async function obtenerProductos() {
     }
   );
 
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
   return {
     ok: response.ok,
     status: response.status,
-    data: await response.json()
+    data
   };
 }
 
 function extraerProductos(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
   return [];
 }
 
+function extraerSaldo(data) {
+  const valor =
+    data?.data?.wallet_balance ??
+    data?.wallet_balance;
+
+  const saldo = Number(valor);
+
+  return Number.isFinite(saldo)
+    ? saldo
+    : null;
+}
+
 // ======================================================
-// CONSULTAR / RASTREAR ORDEN
+// RASTREAR ORDEN
 // ======================================================
 
 async function consultarOrden(partnerOrderId) {
@@ -184,6 +218,102 @@ async function consultarOrden(partnerOrderId) {
     ok: response.ok,
     status: response.status,
     data
+  };
+}
+
+function obtenerDatosOrden(respuesta, orderId) {
+  const data =
+    respuesta?.data?.data ??
+    respuesta?.data ??
+    {};
+
+  const statusRaw =
+    data.status ??
+    data.order_status ??
+    data.orderStatus ??
+    data.state ??
+    "UNKNOWN";
+
+  const status =
+    String(statusRaw).toUpperCase();
+
+  let icono = "🔎";
+  let titulo = "ESTADO DE LA ORDEN";
+  let descripcion =
+    `Estado: ${statusRaw}`;
+
+  if (
+    status === "SUCCESS" ||
+    status === "COMPLETED" ||
+    status === "COMPLETE" ||
+    status === "SUCCESSFUL"
+  ) {
+    icono = "✅";
+    titulo = "RECARGA COMPLETADA";
+    descripcion =
+      "GoXTop informa que la orden fue completada.";
+  } else if (
+    status === "FAILED" ||
+    status === "FAIL" ||
+    status === "CANCELLED" ||
+    status === "CANCELED" ||
+    status === "REJECTED"
+  ) {
+    icono = "❌";
+    titulo = "RECARGA FALLIDA";
+    descripcion =
+      `GoXTop informa: ${statusRaw}`;
+  } else if (
+    status === "PENDING" ||
+    status === "PROCESSING" ||
+    status === "IN_PROGRESS" ||
+    status === "QUEUED"
+  ) {
+    icono = "⏳";
+    titulo = "RECARGA EN PROCESO";
+    descripcion =
+      `Estado actual: ${statusRaw}`;
+  }
+
+  const id =
+    data.userid ??
+    data.user_id ??
+    data.player_id ??
+    null;
+
+  const producto =
+    data.denom ??
+    data.product ??
+    data.product_name ??
+    null;
+
+  const precio =
+    data.amount ??
+    data.price ??
+    data.cost ??
+    null;
+
+  let texto =
+    `${icono} ${titulo}\n\n` +
+    `📦 Orden:\n${orderId}\n\n`;
+
+  if (id) {
+    texto += `🆔 ID: ${id}\n`;
+  }
+
+  if (producto) {
+    texto += `💎 Producto: ${producto}\n`;
+  }
+
+  if (precio !== null) {
+    texto += `💵 Monto: $${precio}\n`;
+  }
+
+  texto += `\n${descripcion}`;
+
+  return {
+    texto,
+    status
   };
 }
 
@@ -239,103 +369,7 @@ async function crearRecarga(order) {
 }
 
 // ======================================================
-// INTERPRETAR ESTADO DE ORDEN
-// ======================================================
-
-function obtenerDatosOrden(respuesta, orderId) {
-  const data =
-    respuesta?.data?.data ??
-    respuesta?.data ??
-    {};
-
-  const statusRaw =
-    data.status ??
-    data.order_status ??
-    data.orderStatus ??
-    data.state ??
-    "UNKNOWN";
-
-  const status =
-    String(statusRaw).toUpperCase();
-
-  let icono = "🔎";
-  let titulo = "ESTADO DE LA ORDEN";
-  let descripcion = `Estado: ${statusRaw}`;
-
-  if (
-    status === "SUCCESS" ||
-    status === "COMPLETED" ||
-    status === "COMPLETE" ||
-    status === "SUCCESSFUL"
-  ) {
-    icono = "✅";
-    titulo = "RECARGA COMPLETADA";
-    descripcion = "GoXTop informa que la orden fue completada.";
-  } else if (
-    status === "FAILED" ||
-    status === "FAIL" ||
-    status === "CANCELLED" ||
-    status === "CANCELED" ||
-    status === "REJECTED"
-  ) {
-    icono = "❌";
-    titulo = "RECARGA FALLIDA";
-    descripcion = `GoXTop informa: ${statusRaw}`;
-  } else if (
-    status === "PENDING" ||
-    status === "PROCESSING" ||
-    status === "IN_PROGRESS" ||
-    status === "QUEUED"
-  ) {
-    icono = "⏳";
-    titulo = "RECARGA EN PROCESO";
-    descripcion = `Estado actual: ${statusRaw}`;
-  }
-
-  const id =
-    data.userid ??
-    data.user_id ??
-    data.player_id ??
-    null;
-
-  const producto =
-    data.denom ??
-    data.product ??
-    data.product_name ??
-    null;
-
-  const precio =
-    data.amount ??
-    data.price ??
-    data.cost ??
-    null;
-
-  let texto =
-    `${icono} ${titulo}\n\n` +
-    `📦 Orden:\n${orderId}\n\n`;
-
-  if (id) {
-    texto += `🆔 ID: ${id}\n`;
-  }
-
-  if (producto) {
-    texto += `💎 Producto: ${producto}\n`;
-  }
-
-  if (precio !== null) {
-    texto += `💵 Monto: $${precio}\n`;
-  }
-
-  texto += `\n${descripcion}`;
-
-  return {
-    texto,
-    status
-  };
-}
-
-// ======================================================
-// INTERFAZ PRINCIPAL
+// TECLADOS
 // ======================================================
 
 function tecladoPrincipal() {
@@ -405,7 +439,14 @@ function tecladoOrden(orderId) {
   };
 }
 
-async function mostrarMenu(chatId, messageId = null) {
+// ======================================================
+// MENÚ
+// ======================================================
+
+async function mostrarMenu(
+  chatId,
+  messageId = null
+) {
   const texto =
     "🎮 JS RECARGAS\n\n" +
     "Panel de administración\n\n" +
@@ -418,18 +459,22 @@ async function mostrarMenu(chatId, messageId = null) {
       texto,
       tecladoPrincipal()
     );
+
     return;
   }
 
-  const result = await enviarMensaje(
-    chatId,
-    texto,
-    tecladoPrincipal()
-  );
+  const result =
+    await enviarMensaje(
+      chatId,
+      texto,
+      tecladoPrincipal()
+    );
 
   if (result.ok) {
     const session =
-      sessions.get(String(chatId)) || {};
+      sessions.get(
+        String(chatId)
+      ) || {};
 
     session.panelMessageId =
       result.result.message_id;
@@ -479,19 +524,22 @@ async function mostrarEstadoOrden(
             [
               {
                 text: "🔄 Intentar otra vez",
-                callback_data: `track:${orderId}`
+                callback_data:
+                  `track:${orderId}`
               }
             ],
             [
               {
                 text: "🔎 Otra orden",
-                callback_data: "rastrear"
+                callback_data:
+                  "rastrear"
               }
             ],
             [
               {
                 text: "🏠 Menú",
-                callback_data: "menu"
+                callback_data:
+                  "menu"
               }
             ]
           ]
@@ -532,13 +580,15 @@ async function mostrarEstadoOrden(
           [
             {
               text: "🔄 Intentar otra vez",
-              callback_data: `track:${orderId}`
+              callback_data:
+                `track:${orderId}`
             }
           ],
           [
             {
               text: "🏠 Menú",
-              callback_data: "menu"
+              callback_data:
+                "menu"
             }
           ]
         ]
@@ -580,7 +630,9 @@ async function cargarProductos(
     const productos =
       extraerProductos(result.data)
         .filter(
-          p => p.stockStatus === "in_stock"
+          p =>
+            p.stockStatus ===
+            "in_stock"
         );
 
     if (!productos.length) {
@@ -595,13 +647,17 @@ async function cargarProductos(
     }
 
     const session =
-      sessions.get(String(chatId)) || {};
+      sessions.get(
+        String(chatId)
+      ) || {};
 
-    session.productos = productos;
+    session.productos =
+      productos;
 
-    session.estado = paraRecarga
-      ? "eligiendo_producto"
-      : "viendo_productos";
+    session.estado =
+      paraRecarga
+        ? "eligiendo_producto"
+        : "viendo_productos";
 
     sessions.set(
       String(chatId),
@@ -623,11 +679,14 @@ async function cargarProductos(
         j < productos.length;
         j++
       ) {
-        const p = productos[j];
+        const p =
+          productos[j];
 
         fila.push({
-          text: `${p.name} · $${p.price}`,
-          callback_data: `p:${j}`
+          text:
+            `${p.name} · $${p.price}`,
+          callback_data:
+            `p:${j}`
         });
       }
 
@@ -646,15 +705,20 @@ async function cargarProductos(
 
     const titulo =
       paraRecarga
-        ? `💎 NUEVA RECARGA\n\n🆔 ID: ${session.userid}\n\nElegí un producto:`
-        : "📦 PRODUCTOS\n\nFree Fire LATAM\n\nElegí un producto:";
+        ? "💎 NUEVA RECARGA\n\n" +
+          `🆔 ID: ${session.userid}\n\n` +
+          "Elegí un producto:"
+        : "📦 PRODUCTOS\n\n" +
+          "Free Fire LATAM\n\n" +
+          "Elegí un producto:";
 
     await editarMensaje(
       chatId,
       messageId,
       titulo,
       {
-        inline_keyboard: filas
+        inline_keyboard:
+          filas
       }
     );
 
@@ -696,13 +760,15 @@ app.post(
           message.chat.id;
 
         const text =
-          (message.text || "").trim();
+          (message.text || "")
+            .trim();
 
         if (!esAdmin(chatId)) {
           await enviarMensaje(
             chatId,
             "⛔ Acceso no autorizado."
           );
+
           return;
         }
 
@@ -714,11 +780,13 @@ app.post(
             );
 
           if (
-            oldSession?.panelMessageId
+            oldSession
+              ?.panelMessageId
           ) {
             await borrarMensaje(
               chatId,
-              oldSession.panelMessageId
+              oldSession
+                .panelMessageId
             );
           }
 
@@ -729,7 +797,10 @@ app.post(
             }
           );
 
-          await mostrarMenu(chatId);
+          await mostrarMenu(
+            chatId
+          );
+
           return;
         }
 
@@ -738,10 +809,7 @@ app.post(
             String(chatId)
           );
 
-        // ==============================================
-        // ESPERANDO ID DE FREE FIRE
-        // ==============================================
-
+        // ESPERANDO ID
         if (
           session?.estado ===
           "esperando_id"
@@ -751,10 +819,13 @@ app.post(
             message.message_id
           );
 
-          if (!/^\d+$/.test(text)) {
+          if (
+            !/^\d+$/.test(text)
+          ) {
             await editarMensaje(
               chatId,
-              session.panelMessageId,
+              session
+                .panelMessageId,
               "❌ ID NO VÁLIDO\n\n" +
               "El ID debe contener solamente números.\n\n" +
               "Escribilo nuevamente:",
@@ -762,7 +833,8 @@ app.post(
                 inline_keyboard: [
                   [
                     {
-                      text: "❌ Cancelar",
+                      text:
+                        "❌ Cancelar",
                       callback_data:
                         "cancelar"
                     }
@@ -774,7 +846,9 @@ app.post(
             return;
           }
 
-          session.userid = text;
+          session.userid =
+            text;
+
           session.estado =
             "eligiendo_producto";
 
@@ -785,17 +859,15 @@ app.post(
 
           await cargarProductos(
             chatId,
-            session.panelMessageId,
+            session
+              .panelMessageId,
             true
           );
 
           return;
         }
 
-        // ==============================================
-        // ESPERANDO NÚMERO DE ORDEN
-        // ==============================================
-
+        // ESPERANDO ORDEN
         if (
           session?.estado ===
           "esperando_orden"
@@ -814,14 +886,16 @@ app.post(
           ) {
             await editarMensaje(
               chatId,
-              session.panelMessageId,
+              session
+                .panelMessageId,
               "❌ ORDEN NO VÁLIDA\n\n" +
               "Escribí nuevamente el número de orden.",
               {
                 inline_keyboard: [
                   [
                     {
-                      text: "❌ Cancelar",
+                      text:
+                        "❌ Cancelar",
                       callback_data:
                         "cancelar"
                     }
@@ -846,7 +920,8 @@ app.post(
 
           await mostrarEstadoOrden(
             chatId,
-            session.panelMessageId,
+            session
+              .panelMessageId,
             orderId
           );
 
@@ -868,15 +943,20 @@ app.post(
       // BOTONES
       // ================================================
 
-      if (req.body.callback_query) {
+      if (
+        req.body.callback_query
+      ) {
         const callback =
-          req.body.callback_query;
+          req.body
+            .callback_query;
 
         const chatId =
-          callback.message.chat.id;
+          callback
+            .message.chat.id;
 
         const messageId =
-          callback.message.message_id;
+          callback
+            .message.message_id;
 
         const data =
           callback.data;
@@ -957,8 +1037,10 @@ app.post(
           return;
         }
 
-        // RASTREAR ORDEN
-        if (data === "rastrear") {
+        // RASTREAR
+        if (
+          data === "rastrear"
+        ) {
           session = {
             panelMessageId:
               messageId,
@@ -982,8 +1064,7 @@ app.post(
               inline_keyboard: [
                 [
                   {
-                    text:
-                      "❌ Cancelar",
+                    text:                      "❌ Cancelar",
                     callback_data:
                       "cancelar"
                   }
@@ -997,7 +1078,9 @@ app.post(
 
         // ACTUALIZAR ESTADO
         if (
-          data.startsWith("track:")
+          data.startsWith(
+            "track:"
+          )
         ) {
           const orderId =
             data.substring(6);
@@ -1016,7 +1099,7 @@ app.post(
           sessions.set(
             String(chatId),
             {
-                         panelMessageId:
+              panelMessageId:
                 messageId,
               estado: "menu"
             }
@@ -1042,7 +1125,15 @@ app.post(
             const result =
               await obtenerSaldo();
 
-            if (!result.ok) {
+            const saldo =
+              extraerSaldo(
+                result.data
+              );
+
+            if (
+              !result.ok ||
+              saldo === null
+            ) {
               await editarMensaje(
                 chatId,
                 messageId,
@@ -1053,19 +1144,12 @@ app.post(
               return;
             }
 
-            const balance =
-              result.data?.data
-                ?.wallet_balance ??
-              result.data
-                ?.wallet_balance ??
-              "No disponible";
-
             await editarMensaje(
               chatId,
               messageId,
               "💰 SALDO\n\n" +
               "Disponible en GoXTop:\n" +
-              `$${balance} USD`,
+              `$${saldo.toFixed(3)} USD`,
               tecladoVolver()
             );
 
@@ -1087,7 +1171,9 @@ app.post(
         }
 
         // PRODUCTOS
-        if (data === "productos") {
+        if (
+          data === "productos"
+        ) {
           session.estado =
             "viendo_productos";
 
@@ -1105,14 +1191,21 @@ app.post(
           return;
         }
 
+        // ==============================================
         // PRODUCTO SELECCIONADO
-        if (data.startsWith("p:")) {
+        // ==============================================
+
+        if (
+          data.startsWith("p:")
+        ) {
           session =
             sessions.get(
               String(chatId)
             );
 
-          if (!session?.productos) {
+          if (
+            !session?.productos
+          ) {
             await editarMensaje(
               chatId,
               messageId,
@@ -1129,13 +1222,17 @@ app.post(
             );
 
           const producto =
-            session.productos[index];
+            session
+              .productos[index];
 
           if (!producto) {
             return;
           }
 
-          // Solo viendo catálogo
+          // ============================================
+          // SOLO VER PRODUCTO
+          // ============================================
+
           if (
             session.estado ===
             "viendo_productos"
@@ -1172,7 +1269,10 @@ app.post(
             return;
           }
 
-          // Producto para una recarga
+          // ============================================
+          // PRODUCTO PARA RECARGA
+          // ============================================
+
           if (
             session.estado ===
               "eligiendo_producto" &&
@@ -1192,47 +1292,246 @@ app.post(
             await editarMensaje(
               chatId,
               messageId,
-              "💎 CONFIRMAR RECARGA\n\n" +
-              "🎮 Free Fire LATAM\n" +
+              "⏳ PREPARANDO RECARGA\n\n" +
               `🆔 ID: ${session.userid}\n` +
-              `💎 Producto: ${producto.name}\n` +
-              `💵 Costo: $${producto.price}\n\n` +
-              "Revisá los datos antes de continuar.",
-              {
-                inline_keyboard: [
-                  [
-                    {
-                      text:
-                        "✅ Confirmar",
-                      callback_data:
-                        "confirmar"
-                    }
-                  ],
-                  [
-                    {
-                      text:
-                        "‹ Cambiar producto",
-                      callback_data:
-                        "volver_productos"
-                    }
-                  ],
-                  [
-                    {
-                      text:
-                        "❌ Cancelar",
-                      callback_data:
-                        "cancelar"
-                    }
-                  ]
-                ]
-              }
+              `💎 Producto: ${producto.name}\n\n` +
+              "Consultando saldo actual..."
             );
+
+            try {
+              const saldoResult =
+                await obtenerSaldo();
+
+              const saldo =
+                extraerSaldo(
+                  saldoResult.data
+                );
+
+              const costo =
+                Number(
+                  producto.price
+                );
+
+              if (
+                !saldoResult.ok ||
+                saldo === null ||
+                !Number.isFinite(
+                  costo
+                )
+              ) {
+                session.estado =
+                  "eligiendo_producto";
+
+                sessions.set(
+                  String(chatId),
+                  session
+                );
+
+                await editarMensaje(
+                  chatId,
+                  messageId,
+                  "⚠️ NO SE PUDO CONSULTAR EL SALDO\n\n" +
+                  `🆔 ID: ${session.userid}\n` +
+                  `💎 Producto: ${producto.name}\n` +
+                  `💵 Costo: $${producto.price}\n\n` +
+                  "Por seguridad no se habilitó la confirmación.",
+                  {
+                    inline_keyboard: [
+                      [
+                        {
+                          text:
+                            "🔄 Intentar nuevamente",
+                          callback_data:
+                            `p:${index}`
+                        }
+                      ],
+                      [
+                        {
+                          text:
+                            "‹ Cambiar producto",
+                          callback_data:
+                            "volver_productos"
+                        }
+                      ],
+                      [
+                        {
+                          text:
+                            "❌ Cancelar",
+                          callback_data:
+                            "cancelar"
+                        }
+                      ]
+                    ]
+                  }
+                );
+
+                return;
+              }
+
+              const restante =
+                saldo - costo;
+
+              session.saldoAntes =
+                saldo;
+
+              session.saldoDespues =
+                restante;
+
+              sessions.set(
+                String(chatId),
+                session
+              );
+
+              // ========================================
+              // SALDO INSUFICIENTE
+              // ========================================
+
+              if (restante < 0) {
+                const faltante =
+                  Math.abs(
+                    restante
+                  );
+
+                session.estado =
+                  "saldo_insuficiente";
+
+                sessions.set(
+                  String(chatId),
+                  session
+                );
+
+                await editarMensaje(
+                  chatId,
+                  messageId,
+                  "⚠️ SALDO INSUFICIENTE\n\n" +
+                  "🎮 Free Fire LATAM\n" +
+                  `🆔 ID: ${session.userid}\n` +
+                  `💎 Producto: ${producto.name}\n` +
+                  `💵 Costo: $${costo.toFixed(3)}\n\n` +
+                  `💰 Saldo actual: $${saldo.toFixed(3)}\n` +
+                  `❌ Te faltan: $${faltante.toFixed(3)}\n\n` +
+                  "No se puede confirmar esta recarga.",
+                  {
+                    inline_keyboard: [
+                      [
+                        {
+                          text:
+                            "‹ Cambiar producto",
+                          callback_data:
+                            "volver_productos"
+                        }
+                      ],
+                      [
+                        {
+                          text:
+                            "🏠 Menú",
+                          callback_data:
+                            "menu"
+                        }
+                      ]
+                    ]
+                  }
+                );
+
+                return;
+              }
+
+              // ========================================
+              // SALDO SUFICIENTE
+              // ========================================
+
+              await editarMensaje(
+                chatId,
+                messageId,
+                "💎 CONFIRMAR RECARGA\n\n" +
+                "🎮 Free Fire LATAM\n" +
+                `🆔 ID: ${session.userid}\n` +
+                `💎 Producto: ${producto.name}\n` +
+                `💵 Costo: $${costo.toFixed(3)}\n\n` +
+                `💰 Saldo actual: $${saldo.toFixed(3)}\n` +
+                `💸 Después de recargar: $${restante.toFixed(3)}\n\n` +
+                "Revisá los datos antes de continuar.",
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text:
+                          "✅ Confirmar",
+                        callback_data:
+                          "confirmar"
+                      }
+                    ],
+                    [
+                      {
+                        text:
+                          "‹ Cambiar producto",
+                        callback_data:
+                          "volver_productos"
+                      }
+                    ],
+                    [
+                      {
+                        text:
+                          "❌ Cancelar",
+                        callback_data:
+                          "cancelar"
+                      }
+                    ]
+                  ]
+                }
+              );
+
+            } catch (error) {
+              console.error(
+                "Error consultando saldo:",
+                error
+              );
+
+              session.estado =
+                "eligiendo_producto";
+
+              sessions.set(
+                String(chatId),
+                session
+              );
+
+              await editarMensaje(
+                chatId,
+                messageId,
+                "⚠️ ERROR DE CONEXIÓN\n\n" +
+                "No se pudo consultar el saldo de GoXTop.\n\n" +
+                "Por seguridad no se habilitó la recarga.",
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text:
+                          "‹ Volver",
+                        callback_data:
+                          "volver_productos"
+                      }
+                    ],
+                    [
+                      {
+                        text:
+                          "🏠 Menú",
+                        callback_data:
+                          "menu"
+                      }
+                    ]
+                  ]
+                }
+              );
+            }
 
             return;
           }
         }
 
+        // ==============================================
         // VOLVER A PRODUCTOS
+        // ==============================================
+
         if (
           data ===
           "volver_productos"
@@ -1242,7 +1541,9 @@ app.post(
               String(chatId)
             );
 
-          if (!session?.userid) {
+          if (
+            !session?.userid
+          ) {
             await mostrarMenu(
               chatId,
               messageId
@@ -1254,7 +1555,8 @@ app.post(
           session.estado =
             "eligiendo_producto";
 
-          session.producto = null;
+          session.producto =
+            null;
 
           sessions.set(
             String(chatId),
@@ -1274,7 +1576,9 @@ app.post(
         // CONFIRMAR RECARGA
         // ==============================================
 
-        if (data === "confirmar") {
+        if (
+          data === "confirmar"
+        ) {
           session =
             sessions.get(
               String(chatId)
@@ -1290,7 +1594,7 @@ app.post(
             return;
           }
 
-          // Bloqueo contra doble toque
+          // Bloqueamos doble toque
           session.estado =
             "procesando";
 
@@ -1314,6 +1618,154 @@ app.post(
               session.producto.price
           };
 
+          // ============================================
+          // REVISAR SALDO OTRA VEZ ANTES DE GASTAR
+          // ============================================
+
+          try {
+            const saldoResult =
+              await obtenerSaldo();
+
+            const saldoActual =
+              extraerSaldo(
+                saldoResult.data
+              );
+
+            const costo =
+              Number(
+                order.price
+              );
+
+            if (
+              !saldoResult.ok ||
+              saldoActual === null ||
+              !Number.isFinite(
+                costo
+              )
+            ) {
+              session.estado =
+                "confirmando";
+
+              sessions.set(
+                String(chatId),
+                session
+              );
+
+              await editarMensaje(
+                chatId,
+                messageId,
+                "⚠️ NO SE PUDO VERIFICAR EL SALDO\n\n" +
+                "La recarga NO fue enviada.\n\n" +
+                "Intentá nuevamente.",
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text:
+                          "‹ Volver",
+                        callback_data:
+                          "volver_productos"
+                      }
+                    ],
+                    [
+                      {
+                        text:
+                          "🏠 Menú",
+                        callback_data:
+                          "menu"
+                      }
+                    ]
+                  ]
+                }
+              );
+
+              return;
+            }
+
+            if (
+              saldoActual < costo
+            ) {
+              const faltante =
+                costo -
+                saldoActual;
+
+              session.estado =
+                "saldo_insuficiente";
+
+              sessions.set(
+                String(chatId),
+                session
+              );
+
+              await editarMensaje(
+                chatId,
+                messageId,
+                "⚠️ SALDO INSUFICIENTE\n\n" +
+                `💰 Saldo actual: $${saldoActual.toFixed(3)}\n` +
+                `💵 Costo: $${costo.toFixed(3)}\n` +
+                `❌ Te faltan: $${faltante.toFixed(3)}\n\n` +
+                "La recarga NO fue enviada.",
+                {
+                  inline_keyboard: [
+                    [
+                      {
+                        text:
+                          "‹ Cambiar producto",
+                        callback_data:
+                          "volver_productos"
+                      }
+                    ],
+                    [
+                      {
+                        text:
+                          "🏠 Menú",
+                        callback_data:
+                          "menu"
+                      }
+                    ]
+                  ]
+                }
+              );
+
+              return;
+            }
+
+          } catch (error) {
+            console.error(
+              "Error verificando saldo:",
+              error
+            );
+
+            session.estado =
+              "confirmando";
+
+            sessions.set(
+              String(chatId),
+              session
+            );
+
+            await editarMensaje(
+              chatId,
+              messageId,
+              "⚠️ ERROR VERIFICANDO SALDO\n\n" +
+              "La recarga NO fue enviada.",
+              {
+                inline_keyboard: [
+                  [
+                    {
+                      text:
+                        "🏠 Menú",
+                      callback_data:
+                        "menu"
+                    }
+                  ]
+                ]
+              }
+            );
+
+            return;
+          }
+
           await editarMensaje(
             chatId,
             messageId,
@@ -1321,7 +1773,7 @@ app.post(
             `🆔 ${order.userid}\n` +
             `💎 ${order.cantidad}\n\n` +
             "Enviando pedido a GoXTop...\n" +
-            "No repitas la operación."
+            "No cierres ni repitas la operación."
           );
 
           try {
@@ -1331,11 +1783,12 @@ app.post(
               );
 
             if (
-              result.data?.success ===
-              true
+              result.data
+                ?.success === true
             ) {
               const orderId =
-                result.partner_orderid;
+                result
+                  .partner_orderid;
 
               sessions.set(
                 String(chatId),
@@ -1358,7 +1811,7 @@ app.post(
                 "📦 Orden:\n" +
                 `${orderId}\n\n` +
                 "GoXTop aceptó el pedido.\n" +
-                "Podés consultar su estado con el botón de abajo.",
+                "Podés consultar su estado abajo.",
                 tecladoOrden(
                   orderId
                 )
@@ -1383,7 +1836,8 @@ app.post(
               `🆔 ID: ${order.userid}\n` +
               `💎 Producto: ${order.cantidad}\n\n` +
               `${
-                result.data?.message ||
+                result.data
+                  ?.message ||
                 "GoXTop rechazó el pedido."
               }\n\n` +
               "No repitas la operación hasta revisar el estado.",
@@ -1411,7 +1865,7 @@ app.post(
               String(chatId),
               {
                 panelMessageId:
-                  messageId,
+                    messageId,
                 estado: "menu"
               }
             );
@@ -1559,7 +2013,12 @@ app.get(
         .status(response.status)
         .json(data);
 
-    } catch {
+    } catch (error) {
+      console.error(
+        "Error productos API:",
+        error
+      );
+
       return res
         .status(500)
         .json({
