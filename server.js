@@ -9,6 +9,14 @@ const ADMIN_TELEGRAM_ID = "1051260349";
 
 const sessions = new Map();
 
+// Configuración del panel
+const SALDO_ALERTA_USD = 10;
+let saldoBajoAvisado = false;
+
+// Resumen diario en memoria.
+// Se conserva mientras el proceso de Render siga encendido.
+const ventasDiarias = [];
+
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString("utf8");
@@ -132,11 +140,25 @@ async function obtenerSaldo() {
     data = {};
   }
 
-  return {
+  const result = {
     ok: response.ok,
     status: response.status,
     data
   };
+
+  const saldo =
+    extraerSaldo(data);
+
+  if (
+    response.ok &&
+    saldo !== null
+  ) {
+    await revisarAlertaSaldo(
+      saldo
+    );
+  }
+
+  return result;
 }
 
 async function obtenerProductos() {
@@ -186,6 +208,31 @@ function extraerSaldo(data) {
   return Number.isFinite(saldo)
     ? saldo
     : null;
+}
+
+async function revisarAlertaSaldo(saldo) {
+  if (!Number.isFinite(saldo)) {
+    return;
+  }
+
+  if (saldo > SALDO_ALERTA_USD) {
+    saldoBajoAvisado = false;
+    return;
+  }
+
+  if (saldoBajoAvisado) {
+    return;
+  }
+
+  saldoBajoAvisado = true;
+
+  await enviarMensaje(
+    ADMIN_TELEGRAM_ID,
+    "⚠️ SALDO BAJO EN GOXTOP\n\n" +
+    `💰 Saldo actual: ${saldo.toFixed(3)} USD\n` +
+    `🔔 Límite de alerta: ${SALDO_ALERTA_USD.toFixed(2)} USD\n\n` +
+    "Conviene recargar saldo antes de seguir vendiendo."
+  );
 }
 
 // ======================================================
@@ -434,6 +481,221 @@ function paquetePromoRD(item) {
 function precioPesos(valor) {
   return "$" + Number(valor || 0).toLocaleString("es-AR");
 }
+
+function normalizarPaqueteVenta(producto) {
+  const texto =
+    String(
+      producto?.Pack ??
+      producto?.name ??
+      producto ??
+      ""
+    );
+
+  const conocidos = [
+    6160,
+    5600,
+    2398,
+    1166,
+    572,
+    341,
+    110
+  ];
+
+  return (
+    conocidos.find(
+      numero =>
+        texto.includes(
+          String(numero)
+        )
+    ) ??
+    null
+  );
+}
+
+function precioVentaNormalArs(producto) {
+  const paquete =
+    normalizarPaqueteVenta(
+      producto
+    );
+
+  if (paquete === 6160) {
+    return PRECIOS_NORMAL_RD[5600] || 0;
+  }
+
+  return (
+    PRECIOS_NORMAL_RD[
+      paquete
+    ] ||
+    0
+  );
+}
+
+function esRecargaCara(producto) {
+  const paquete =
+    normalizarPaqueteVenta(
+      producto
+    );
+
+  return [
+    2398,
+    5600,
+    6160
+  ].includes(paquete);
+}
+
+function fechaArgentinaKey(
+  fecha = new Date()
+) {
+  const partes =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          "America/Argentina/Cordoba",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }
+    ).formatToParts(fecha);
+
+  const get =
+    tipo =>
+      partes.find(
+        p => p.type === tipo
+      )?.value || "";
+
+  return (
+    get("year") +
+    "-" +
+    get("month") +
+    "-" +
+    get("day")
+  );
+}
+
+function fechaArgentinaTexto(
+  fecha = new Date()
+) {
+  return new Intl.DateTimeFormat(
+    "es-AR",
+    {
+      timeZone:
+        "America/Argentina/Cordoba",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric"
+    }
+  ).format(fecha);
+}
+
+function registrarVenta(venta) {
+  ventasDiarias.push({
+    fecha:
+      new Date().toISOString(),
+    dia:
+      fechaArgentinaKey(),
+    ...venta
+  });
+
+  if (
+    ventasDiarias.length >
+    500
+  ) {
+    ventasDiarias.splice(
+      0,
+      ventasDiarias.length - 500
+    );
+  }
+}
+
+function construirResumenDia() {
+  const hoy =
+    fechaArgentinaKey();
+
+  const ventas =
+    ventasDiarias.filter(
+      venta =>
+        venta.dia === hoy
+    );
+
+  const normales =
+    ventas.filter(
+      venta =>
+        venta.tipo === "normal"
+    );
+
+  const promos =
+    ventas.filter(
+      venta =>
+        venta.tipo === "promo"
+    );
+
+  const facturado =
+    ventas.reduce(
+      (total, venta) =>
+        total +
+        Number(
+          venta.precioArs || 0
+        ),
+      0
+    );
+
+  const costoUsd =
+    normales.reduce(
+      (total, venta) =>
+        total +
+        Number(
+          venta.costoUsd || 0
+        ),
+      0
+    );
+
+  let texto =
+    "📊 RESUMEN DEL DÍA\n\n" +
+    `📅 ${fechaArgentinaTexto()}\n\n` +
+    `🧾 Ventas registradas: ${ventas.length}\n` +
+    `💎 Recargas normales: ${normales.length}\n` +
+    `🇩🇴 Promos registradas: ${promos.length}\n` +
+    `💵 Facturado: ${precioPesos(facturado)} ARS\n` +
+    `💳 Costo GoXTop: ${costoUsd.toFixed(3)} USD`;
+
+  if (!ventas.length) {
+    texto +=
+      "\n\nTodavía no hay ventas registradas hoy.";
+  } else {
+    texto +=
+      "\n\n🕘 ÚLTIMAS VENTAS\n";
+
+    texto +=
+      ventas
+        .slice(-5)
+        .reverse()
+        .map(venta => {
+          const tipo =
+            venta.tipo === "promo"
+              ? "🇩🇴"
+              : "💎";
+
+          const precio =
+            venta.precioArs
+              ? precioPesos(
+                  venta.precioArs
+                )
+              : "sin precio ARS";
+
+          return (
+            `${tipo} ${venta.paquete} · ${precio} · ID ${venta.userid}`
+          );
+        })
+        .join("\n");
+  }
+
+  texto +=
+    "\n\nℹ️ Este resumen se reinicia si Render reinicia el servicio.";
+
+  return texto;
+}
+
 // ======================================================
 // RASTREAR ORDEN
 // ======================================================
@@ -645,6 +907,12 @@ function tecladoPrincipal() {
         {
           text: "📦 Productos",
           callback_data: "productos"
+        }
+      ],
+      [
+        {
+          text: "📊 Resumen del día",
+          callback_data: "resumen_dia"
         }
       ]
     ]
@@ -1190,11 +1458,52 @@ if (session?.estado === "esperando_id_promos") {
         })
         .join("\n");
 
-    session.estado = "menu";
+    session.estado =
+      "promo_resultado";
+
+    session.promoConsulta = {
+      userid: text,
+      nickname: nombre,
+      promosActivas:
+        Array.from(
+          promosActivas
+        )
+    };
 
     sessions.set(
       String(chatId),
       session
+    );
+
+    const botonesPromo =
+      Array.from(
+        promosActivas
+      )
+        .sort(
+          (a, b) => a - b
+        )
+        .map(paquete => [
+          {
+            text:
+              `🛒 Preparar ${paquete} · ${precioPesos(PRECIOS_PROMO_RD[paquete])}`,
+            callback_data:
+              `promo_venta:${paquete}`
+          }
+        ]);
+
+    botonesPromo.push(
+      [
+        {
+          text: "🔎 Consultar otro ID",
+          callback_data: "promos_rd"
+        }
+      ],
+      [
+        {
+          text: "🏠 Menú principal",
+          callback_data: "menu"
+        }
+      ]
     );
 
     await editarMensaje(
@@ -1202,20 +1511,8 @@ if (session?.estado === "esperando_id_promos") {
       session.panelMessageId,
       salida,
       {
-        inline_keyboard: [
-          [
-            {
-              text: "🔎 Consultar otro ID",
-              callback_data: "promos_rd"
-            }
-          ],
-          [
-            {
-              text: "🏠 Menú principal",
-              callback_data: "menu"
-            }
-          ]
-        ]
+        inline_keyboard:
+          botonesPromo
       }
     );
 
@@ -1591,6 +1888,187 @@ if (data === "promos_rd") {
 
   return;
 }
+
+// PREPARAR VENTA PROMO
+if (
+  data.startsWith(
+    "promo_venta:"
+  )
+) {
+  session =
+    sessions.get(
+      String(chatId)
+    ) || {};
+
+  const paquete =
+    Number(
+      data.substring(
+        "promo_venta:".length
+      )
+    );
+
+  const consulta =
+    session.promoConsulta;
+
+  if (
+    !consulta ||
+    !consulta.promosActivas
+      ?.includes(paquete) ||
+    !PRECIOS_PROMO_RD[paquete]
+  ) {
+    await mostrarMenu(
+      chatId,
+      messageId
+    );
+    return;
+  }
+
+  session.estado =
+    "promo_preparada";
+
+  session.promoSeleccionada =
+    paquete;
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "🛒 VENTA PROMO PREPARADA\n\n" +
+    `🆔 ID: ${consulta.userid}\n` +
+    (
+      consulta.nickname
+        ? `👤 Nombre: ${consulta.nickname}\n`
+        : ""
+    ) +
+    `💎 Promo: ${paquete}\n` +
+    `💵 Precio: ${precioPesos(PRECIOS_PROMO_RD[paquete])}\n\n` +
+    "⚠️ Esto NO compra la promo automáticamente.\n" +
+    "Usá el botón de abajo solamente cuando quieras registrar la venta en el resumen.",
+    {
+      inline_keyboard: [
+        [
+          {
+            text:
+              "✅ Registrar venta",
+            callback_data:
+              `promo_registrar:${paquete}`
+          }
+        ],
+        [
+          {
+            text:
+              "🔎 Consultar otro ID",
+            callback_data:
+              "promos_rd"
+          }
+        ],
+        [
+          {
+            text:
+              "🏠 Menú",
+            callback_data:
+              "menu"
+          }
+        ]
+      ]
+    }
+  );
+
+  return;
+}
+
+// REGISTRAR VENTA PROMO
+if (
+  data.startsWith(
+    "promo_registrar:"
+  )
+) {
+  session =
+    sessions.get(
+      String(chatId)
+    ) || {};
+
+  const paquete =
+    Number(
+      data.substring(
+        "promo_registrar:".length
+      )
+    );
+
+  const consulta =
+    session.promoConsulta;
+
+  if (
+    session.estado !==
+      "promo_preparada" ||
+    session.promoSeleccionada !==
+      paquete ||
+    !consulta ||
+    !PRECIOS_PROMO_RD[paquete]
+  ) {
+    return;
+  }
+
+  registrarVenta({
+    tipo: "promo",
+    userid:
+      consulta.userid,
+    nickname:
+      consulta.nickname,
+    paquete,
+    precioArs:
+      PRECIOS_PROMO_RD[
+        paquete
+      ],
+    costoUsd: 0
+  });
+
+  sessions.set(
+    String(chatId),
+    {
+      panelMessageId:
+        messageId,
+      estado: "menu"
+    }
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "✅ VENTA PROMO REGISTRADA\n\n" +
+    `🆔 ID: ${consulta.userid}\n` +
+    (
+      consulta.nickname
+        ? `👤 Nombre: ${consulta.nickname}\n`
+        : ""
+    ) +
+    `💎 Promo: ${paquete}\n` +
+    `💵 Venta: ${precioPesos(PRECIOS_PROMO_RD[paquete])}\n\n` +
+    "La venta fue sumada al resumen del día.\n" +
+    "No se realizó ninguna recarga automática.",
+    tecladoVolver()
+  );
+
+  return;
+}
+
+// RESUMEN DEL DÍA
+if (
+  data === "resumen_dia"
+) {
+  await editarMensaje(
+    chatId,
+    messageId,
+    construirResumenDia(),
+    tecladoVolver()
+  );
+
+  return;
+}
         // NUEVA RECARGA
         if (data === "nueva") {
           session = {
@@ -1828,7 +2306,12 @@ if (data === "promos_rd") {
               messageId,
               "💰 SALDO\n\n" +
               "Disponible en GoXTop:\n" +
-              `$${saldo.toFixed(3)} USD`,
+              `$${saldo.toFixed(3)} USD` +
+              (
+                saldo <= SALDO_ALERTA_USD
+                  ? "\n\n⚠️ SALDO BAJO: conviene cargar saldo."
+                  : ""
+              ),
               tecladoVolver()
             );
 
@@ -2266,20 +2749,92 @@ if (data === "promos_rd") {
         // ==============================================
 
         if (
-          data === "confirmar"
+          data === "confirmar" ||
+          data === "confirmar_cara"
         ) {
           session =
             sessions.get(
               String(chatId)
             );
 
+          const confirmacionExtra =
+            data ===
+            "confirmar_cara";
+
+          const estadoValido =
+            confirmacionExtra
+              ? session?.estado ===
+                  "confirmacion_extra"
+              : session?.estado ===
+                  "confirmando";
+
           if (
             !session ||
-            session.estado !==
-              "confirmando" ||
+            !estadoValido ||
             !session.producto ||
             !session.userid
           ) {
+            return;
+          }
+
+          if (
+            !confirmacionExtra &&
+            esRecargaCara(
+              session.producto
+            )
+          ) {
+            session.estado =
+              "confirmacion_extra";
+
+            sessions.set(
+              String(chatId),
+              session
+            );
+
+            await editarMensaje(
+              chatId,
+              messageId,
+              "🔐 CONFIRMACIÓN EXTRA\n\n" +
+              "Esta es una recarga de importe alto.\n\n" +
+              `🆔 ID: ${session.userid}\n` +
+              (
+                session.nickname
+                  ? `👤 Nombre: ${session.nickname}\n`
+                  : ""
+              ) +
+              `💎 Producto: ${session.producto.name}\n` +
+              `💵 Costo GoXTop: ${Number(session.producto.price).toFixed(3)} USD\n\n` +
+              "Confirmá una vez más antes de enviar la recarga.",
+              {
+                inline_keyboard: [
+                  [
+                    {
+                      text:
+                        "🔐 Sí, recargar ahora",
+                      callback_data:
+                        "confirmar_cara"
+                    }
+                  ],
+                  [
+                    {
+                      text:
+                        "‹ Cambiar producto",
+                      callback_data:
+                        "volver_productos"
+                    }
+                  ],
+                  [
+                    {
+                      text:
+                        "❌ Cancelar",
+                      callback_data:
+                        "cancelar"
+                    }
+                  ]
+                ]
+              }
+            );
+
             return;
           }
 
@@ -2484,6 +3039,35 @@ if (data === "promos_rd") {
 
               const nickname =
                 session.nickname;
+
+              const paqueteVenta =
+                normalizarPaqueteVenta(
+                  session.producto
+                ) ??
+                order.cantidad;
+
+              const precioVentaArs =
+                precioVentaNormalArs(
+                  session.producto
+                );
+
+              registrarVenta({
+                tipo: "normal",
+                userid:
+                  order.userid,
+                nickname,
+                paquete:
+                  paqueteVenta === 6160
+                    ? 5600
+                    : paqueteVenta,
+                precioArs:
+                  precioVentaArs,
+                costoUsd:
+                  Number(
+                    order.price
+                  ) || 0,
+                orderId
+              });
 
               sessions.set(
                 String(chatId),
