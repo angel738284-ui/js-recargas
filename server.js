@@ -252,7 +252,57 @@ async function verificarJugadorFreeFire(userid) {
     data
   };
 }
+// ======================================================
+// PROMOS RD - VOLSEVER
+// ======================================================
 
+async function consultarPromosRD(userid) {
+  if (!process.env.VOLSEVER_API_KEY) {
+    throw new Error("VOLSEVER_API_KEY no configurada");
+  }
+
+  const url =
+    "https://api.volsever.com/garena/api/v1/pagostore/free-fire/check-discounts-paypal-dom" +
+    "?id=" +
+    encodeURIComponent(userid);
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+      "X-API-Key": process.env.VOLSEVER_API_KEY
+    }
+  });
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data
+  };
+}
+
+function extraerPromosRD(data) {
+  const items =
+    data?.data?.discount_items ??
+    data?.discount_items ??
+    [];
+
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.filter(
+    item => item?.is_discount === true
+  );
+}
 // ======================================================
 // RASTREAR ORDEN
 // ======================================================
