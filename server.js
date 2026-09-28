@@ -446,6 +446,12 @@ function tecladoPrincipal() {
       ],
       [
         {
+          text: "🇩🇴 Consultar promos",
+          callback_data: "promos_rd"
+        }
+      ],
+      [
+        {
           text: "🔎 Rastrear orden",
           callback_data: "rastrear"
         }
@@ -874,7 +880,171 @@ app.post(
           sessions.get(
             String(chatId)
           );
+// ESPERANDO ID PARA PROMOS RD
+if (session?.estado === "esperando_id_promos") {
+  await borrarMensaje(
+    chatId,
+    message.message_id
+  );
 
+  if (!/^\d+$/.test(text)) {
+    await editarMensaje(
+      chatId,
+      session.panelMessageId,
+      "❌ ID NO VÁLIDO\n\n" +
+      "Escribí solamente números:",
+      tecladoVolver()
+    );
+
+    return;
+  }
+
+  session.estado = "consultando_promos";
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    session.panelMessageId,
+    "🇩🇴 CONSULTANDO PROMOS\n\n" +
+    `🆔 ID: ${text}\n\n` +
+    "Consultando promociones disponibles..."
+  );
+
+  try {
+    const resultado =
+      await consultarPromosRD(text);
+
+    if (
+      resultado.status === 404 ||
+      (
+        resultado.data?.status === false &&
+        resultado.data?.code === 404
+      )
+    ) {
+      session.estado =
+        "esperando_id_promos";
+
+      sessions.set(
+        String(chatId),
+        session
+      );
+
+      await editarMensaje(
+        chatId,
+        session.panelMessageId,
+        "❌ JUGADOR NO ENCONTRADO\n\n" +
+        `🆔 ID: ${text}\n\n` +
+        "Revisá el ID e intentá nuevamente.",
+        tecladoVolver()
+      );
+
+      return;
+    }
+
+    if (
+      !resultado.ok ||
+      resultado.data?.status === false
+    ) {
+      throw new Error(
+        "Volsever no disponible"
+      );
+    }
+
+    const promos =
+      extraerPromosRD(
+        resultado.data
+      );
+
+    const nombre =
+      resultado.data?.data?.username ??
+      resultado.data?.username ??
+      null;
+
+    let salida =
+      "🇩🇴 PROMOS DISPONIBLES\n\n" +
+      (nombre
+        ? `👤 ${nombre}\n`
+        : "") +
+      `🆔 ID: ${text}\n\n`;
+
+    if (!promos.length) {
+      salida +=
+        "❌ Este ID no tiene promos disponibles.";
+    } else {
+      salida += promos.map(item => {
+        const diamantes =
+          Number(item.diamonds || 0);
+
+        const bonus =
+          Number(item.bonus_diamonds || 0);
+
+        const total =
+          diamantes + bonus;
+
+        return (
+          `💎 Promo ${total || diamantes}` +
+          " — ✅ Disponible"
+        );
+      }).join("\n");
+    }
+
+    session.estado = "menu";
+
+    sessions.set(
+      String(chatId),
+      session
+    );
+
+    await editarMensaje(
+      chatId,
+      session.panelMessageId,
+      salida,
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "🔎 Consultar otro ID",
+              callback_data: "promos_rd"
+            }
+          ],
+          [
+            {
+              text: "🏠 Menú principal",
+              callback_data: "menu"
+            }
+          ]
+        ]
+      }
+    );
+
+  } catch (error) {
+    console.error(
+      "Error promos RD:",
+      error
+    );
+
+    session.estado = "menu";
+
+    sessions.set(
+      String(chatId),
+      session
+    );
+
+    await editarMensaje(
+      chatId,
+      session.panelMessageId,
+      "⚠️ NO SE PUDIERON CONSULTAR LAS PROMOS\n\n" +
+      "No se realizó ninguna recarga.",
+      tecladoVolver()
+    );
+  }
+
+  return;
+        }
         // ESPERANDO ID
         if (
           session?.estado ===
@@ -1192,7 +1362,37 @@ app.post(
 
           return;
         }
+// CONSULTAR PROMOS RD
+if (data === "promos_rd") {
+  session = {
+    panelMessageId: messageId,
+    estado: "esperando_id_promos"
+  };
 
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "🇩🇴 CONSULTAR PROMOS\n\n" +
+    "Escribí el ID de Free Fire que querés consultar:",
+    {
+      inline_keyboard: [
+        [
+          {
+            text: "❌ Cancelar",
+            callback_data: "cancelar"
+          }
+        ]
+      ]
+    }
+  );
+
+  return;
+}
         // NUEVA RECARGA
         if (data === "nueva") {
           session = {
