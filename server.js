@@ -488,6 +488,88 @@ function precioPesos(valor) {
   return "$" + Number(valor || 0).toLocaleString("es-AR");
 }
 
+function normalizarPrecioIngresado(texto) {
+  const limpio =
+    String(texto || "")
+      .replace(/\$/g, "")
+      .replace(/\s/g, "")
+      .replace(/\./g, "")
+      .replace(/,/g, "");
+
+  if (!/^\d+$/.test(limpio)) {
+    return null;
+  }
+
+  const valor = Number(limpio);
+
+  if (
+    !Number.isFinite(valor) ||
+    valor <= 0 ||
+    valor > 10000000
+  ) {
+    return null;
+  }
+
+  return Math.round(valor);
+}
+
+function textoListaPrecios(tipo) {
+  const esPromo =
+    tipo === "promo";
+
+  const precios =
+    esPromo
+      ? PRECIOS_PROMO_RD
+      : PRECIOS_NORMAL_RD;
+
+  return (
+    (esPromo
+      ? "🔥 PRECIOS CON PROMOS\n\n"
+      : "💵 PRECIOS SIN PROMOS\n\n") +
+    PAQUETES_PROMO_RD
+      .map(
+        paquete =>
+          `💎 ${paquete} — ${precioPesos(precios[paquete])}`
+      )
+      .join("\n") +
+    "\n\n— Recargas JS —"
+  );
+}
+
+function tecladoEditarPaquetes(tipo) {
+  return {
+    inline_keyboard: [
+      ...PAQUETES_PROMO_RD.map(
+        paquete => [
+          {
+            text:
+              `💎 ${paquete} · ${precioPesos(
+                tipo === "promo"
+                  ? PRECIOS_PROMO_RD[paquete]
+                  : PRECIOS_NORMAL_RD[paquete]
+              )}`,
+            callback_data:
+              `editar_precio_paquete:${tipo}:${paquete}`
+          }
+        ]
+      ),
+      [
+        {
+          text: "‹ Volver",
+          callback_data:
+            "editar_precios"
+        }
+      ],
+      [
+        {
+          text: "🏠 Menú principal",
+          callback_data: "menu"
+        }
+      ]
+    ]
+  };
+}
+
 function normalizarPaqueteVenta(producto) {
   const texto =
     String(
@@ -661,7 +743,7 @@ function construirResumenDia() {
     `📅 ${fechaArgentinaTexto()}\n\n` +
     `🧾 Ventas registradas: ${ventas.length}\n` +
     `💎 Recargas normales: ${normales.length}\n` +
-    `🇩🇴 Promos registradas: ${promos.length}\n` +
+    `🔥 Promos registradas: ${promos.length}\n` +
     `💵 Facturado: ${precioPesos(facturado)} ARS\n` +
     `💳 Costo GoXTop: ${costoUsd.toFixed(3)} USD`;
 
@@ -679,7 +761,7 @@ function construirResumenDia() {
         .map(venta => {
           const tipo =
             venta.tipo === "promo"
-              ? "🇩🇴"
+              ? "🔥"
               : "💎";
 
           const precio =
@@ -895,7 +977,7 @@ function tecladoPrincipal() {
       ],
       [
         {
-          text: "🇩🇴 Consultar promos",
+          text: "🔥 Consultar promos",
           callback_data: "promos_rd"
         }
       ],
@@ -907,6 +989,12 @@ function tecladoPrincipal() {
         {
           text: "🔥 Con promos",
           callback_data: "precios_con_promo"
+        }
+      ],
+      [
+        {
+          text: "✏️ Editar precios",
+          callback_data: "editar_precios"
         }
       ],
       [
@@ -1358,7 +1446,119 @@ app.post(
           sessions.get(
             String(chatId)
           );
-// ESPERANDO ID PARA PROMOS RD
+// ESPERANDO NUEVO PRECIO
+if (
+  session?.estado ===
+  "esperando_precio_editar"
+) {
+  await borrarMensaje(
+    chatId,
+    message.message_id
+  );
+
+  const nuevoPrecio =
+    normalizarPrecioIngresado(
+      text
+    );
+
+  if (!nuevoPrecio) {
+    await editarMensaje(
+      chatId,
+      session.panelMessageId,
+      "❌ PRECIO NO VÁLIDO\n\n" +
+      "Escribí solamente el importe.\n" +
+      "Ejemplo: 1500 o $1.500",
+      {
+        inline_keyboard: [
+          [
+            {
+              text: "❌ Cancelar",
+              callback_data:
+                "editar_precios"
+            }
+          ]
+        ]
+      }
+    );
+
+    return;
+  }
+
+  const paquete =
+    Number(
+      session.paquetePrecio
+    );
+
+  const tipo =
+    session.tipoPrecio;
+
+  if (
+    !PAQUETES_PROMO_RD.includes(
+      paquete
+    ) ||
+    !["normal", "promo"].includes(
+      tipo
+    )
+  ) {
+    await mostrarMenu(
+      chatId,
+      session.panelMessageId
+    );
+    return;
+  }
+
+  if (tipo === "promo") {
+    PRECIOS_PROMO_RD[
+      paquete
+    ] = nuevoPrecio;
+  } else {
+    PRECIOS_NORMAL_RD[
+      paquete
+    ] = nuevoPrecio;
+  }
+
+  session.estado = "menu";
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    session.panelMessageId,
+    "✅ PRECIO ACTUALIZADO\n\n" +
+    `💎 Paquete: ${paquete}\n` +
+    `🏷 Tipo: ${tipo === "promo" ? "Con promo" : "Sin promo"}\n` +
+    `💵 Nuevo precio: ${precioPesos(nuevoPrecio)}\n\n` +
+    "El cambio ya está activo en el bot.\n\n" +
+    "— Recargas JS —",
+    {
+      inline_keyboard: [
+        [
+          {
+            text:
+              "✏️ Editar otro precio",
+            callback_data:
+              "editar_precios"
+          }
+        ],
+        [
+          {
+            text:
+              "🏠 Menú principal",
+            callback_data:
+              "menu"
+          }
+        ]
+      ]
+    }
+  );
+
+  return;
+}
+
+// ESPERANDO ID PARA PROMOS
 if (session?.estado === "esperando_id_promos") {
   await borrarMensaje(
     chatId,
@@ -1387,7 +1587,7 @@ if (session?.estado === "esperando_id_promos") {
   await editarMensaje(
     chatId,
     session.panelMessageId,
-    "🇩🇴 CONSULTANDO PROMOS\n\n" +
+    "🔥 CONSULTANDO PROMOS\n\n" +
     `🆔 ID: ${text}\n\n` +
     "Consultando promociones disponibles..."
   );
@@ -1453,7 +1653,7 @@ if (session?.estado === "esperando_id_promos") {
       null;
 
     let salida =
-      "🇩🇴 ESTADO DE PROMOS\n\n" +
+      "🔥 TENÉS ESTAS PROMOS\n\n" +
       (nombre
         ? `👤 ${nombre}\n`
         : "") +
@@ -1487,6 +1687,9 @@ if (session?.estado === "esperando_id_promos") {
           );
         })
         .join("\n");
+
+    salida +=
+      "\n\n— Recargas JS —";
 
     session.estado =
       "promo_resultado";
@@ -1889,25 +2092,10 @@ if (session?.estado === "esperando_id_promos") {
         }
 // PRECIOS SIN PROMOS
 if (data === "precios_sin_promo") {
-  const salida =
-    "💵 PRECIOS SIN PROMOS\n\n" +
-    PAQUETES_PROMO_RD
-      .map(paquete => {
-        const precio =
-          PRECIOS_NORMAL_RD[
-            paquete
-          ];
-
-        return (
-          `💎 ${paquete} — ${precioPesos(precio)}`
-        );
-      })
-      .join("\n");
-
   await editarMensaje(
     chatId,
     messageId,
-    salida,
+    textoListaPrecios("normal"),
     tecladoVolver()
   );
 
@@ -1916,32 +2104,190 @@ if (data === "precios_sin_promo") {
 
 // PRECIOS CON PROMOS
 if (data === "precios_con_promo") {
-  const salida =
-    "🔥 PRECIOS CON PROMOS\n\n" +
-    PAQUETES_PROMO_RD
-      .map(paquete => {
-        const precio =
-          PRECIOS_PROMO_RD[
-            paquete
-          ];
-
-        return (
-          `💎 ${paquete} — ${precioPesos(precio)}`
-        );
-      })
-      .join("\n");
-
   await editarMensaje(
     chatId,
     messageId,
-    salida,
+    textoListaPrecios("promo"),
     tecladoVolver()
   );
 
   return;
 }
 
-// CONSULTAR PROMOS RD
+// EDITAR PRECIOS
+if (data === "editar_precios") {
+  session = {
+    panelMessageId:
+      messageId,
+    estado:
+      "editar_precios"
+  };
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "✏️ EDITAR PRECIOS\n\n" +
+    "¿Qué lista querés modificar?",
+    {
+      inline_keyboard: [
+        [
+          {
+            text:
+              "💵 Sin promo",
+            callback_data:
+              "editar_precio:normal"
+          }
+        ],
+        [
+          {
+            text:
+              "🔥 Con promo",
+            callback_data:
+              "editar_precio:promo"
+          }
+        ],
+        [
+          {
+            text:
+              "🏠 Menú principal",
+            callback_data:
+              "menu"
+          }
+        ]
+      ]
+    }
+  );
+
+  return;
+}
+
+if (
+  data.startsWith(
+    "editar_precio:"
+  )
+) {
+  const tipo =
+    data.substring(
+      "editar_precio:".length
+    );
+
+  if (
+    !["normal", "promo"].includes(
+      tipo
+    )
+  ) {
+    return;
+  }
+
+  session = {
+    panelMessageId:
+      messageId,
+    estado:
+      "seleccionando_precio",
+    tipoPrecio:
+      tipo
+  };
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    tipo === "promo"
+      ? "🔥 EDITAR PRECIOS CON PROMO\n\nElegí el paquete:"
+      : "💵 EDITAR PRECIOS SIN PROMO\n\nElegí el paquete:",
+    tecladoEditarPaquetes(
+      tipo
+    )
+  );
+
+  return;
+}
+
+if (
+  data.startsWith(
+    "editar_precio_paquete:"
+  )
+) {
+  const partes =
+    data.split(":");
+
+  const tipo =
+    partes[1];
+
+  const paquete =
+    Number(partes[2]);
+
+  if (
+    !["normal", "promo"].includes(
+      tipo
+    ) ||
+    !PAQUETES_PROMO_RD.includes(
+      paquete
+    )
+  ) {
+    return;
+  }
+
+  const precioActual =
+    tipo === "promo"
+      ? PRECIOS_PROMO_RD[
+          paquete
+        ]
+      : PRECIOS_NORMAL_RD[
+          paquete
+        ];
+
+  session = {
+    panelMessageId:
+      messageId,
+    estado:
+      "esperando_precio_editar",
+    tipoPrecio:
+      tipo,
+    paquetePrecio:
+      paquete
+  };
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "✏️ NUEVO PRECIO\n\n" +
+    `💎 Paquete: ${paquete}\n` +
+    `🏷 Tipo: ${tipo === "promo" ? "Con promo" : "Sin promo"}\n` +
+    `💵 Actual: ${precioPesos(precioActual)}\n\n` +
+    "Escribí el nuevo precio.\n" +
+    "Ejemplo: 1500 o $1.500",
+    {
+      inline_keyboard: [
+        [
+          {
+            text: "❌ Cancelar",
+            callback_data:
+              "editar_precios"
+          }
+        ]
+      ]
+    }
+  );
+
+  return;
+}
+
+// CONSULTAR PROMOS
 if (data === "promos_rd") {
   session = {
     panelMessageId: messageId,
@@ -1956,7 +2302,7 @@ if (data === "promos_rd") {
   await editarMensaje(
     chatId,
     messageId,
-    "🇩🇴 CONSULTAR PROMOS\n\n" +
+    "🔥 CONSULTAR PROMOS\n\n" +
     "Escribí el ID de Free Fire que querés consultar:",
     {
       inline_keyboard: [
