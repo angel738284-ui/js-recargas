@@ -700,6 +700,142 @@ function registrarVenta(venta) {
   }
 }
 
+function actualizarEstadoVenta(
+  orderId,
+  estado
+) {
+  if (!orderId) {
+    return;
+  }
+
+  const venta =
+    [...ventasDiarias]
+      .reverse()
+      .find(
+        item =>
+          item.orderId === orderId
+      );
+
+  if (!venta) {
+    return;
+  }
+
+  venta.estado = estado;
+  venta.estadoActualizado =
+    new Date().toISOString();
+}
+
+function estadoVentaTexto(estado) {
+  switch (estado) {
+    case "recibida":
+      return "✅ Diamantes recibidos";
+    case "fallida":
+      return "❌ Fallida";
+    case "no_recibida":
+      return "⚠️ No recibida";
+    case "por_verificar":
+      return "🟡 Entrega por verificar";
+    case "promo_manual":
+      return "🔥 Promo manual registrada";
+    case "procesando":
+    default:
+      return "⏳ Procesando";
+  }
+}
+
+function fechaHoraArgentina(
+  fechaIso
+) {
+  if (!fechaIso) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(
+    "es-AR",
+    {
+      timeZone:
+        "America/Argentina/Cordoba",
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }
+  ).format(
+    new Date(fechaIso)
+  );
+}
+
+function construirHistorial() {
+  const operaciones =
+    ventasDiarias
+      .slice(-15)
+      .reverse();
+
+  let texto =
+    "📜 HISTORIAL DE RECARGAS\n\n";
+
+  if (!operaciones.length) {
+    texto +=
+      "Todavía no hay operaciones registradas.";
+  } else {
+    texto +=
+      operaciones
+        .map((venta, index) => {
+          const nombre =
+            venta.nickname ||
+            "Sin nombre";
+
+          const estado =
+            estadoVentaTexto(
+              venta.estado ||
+              (
+                venta.tipo === "promo"
+                  ? "promo_manual"
+                  : "procesando"
+              )
+            );
+
+          let bloque =
+            `${index + 1}. ${estado}\n` +
+            `💎 Paquete: ${venta.paquete}\n` +
+            `👤 Nombre: ${nombre}\n` +
+            `🆔 ID: ${venta.userid}\n`;
+
+          if (venta.precioArs) {
+            bloque +=
+              `💵 Venta: ${precioPesos(venta.precioArs)}\n`;
+          }
+
+          if (
+            venta.tipo === "normal" &&
+            Number.isFinite(
+              Number(venta.costoUsd)
+            )
+          ) {
+            bloque +=
+              `💳 Costo: ${Number(venta.costoUsd).toFixed(3)} USD\n`;
+          }
+
+          if (venta.orderId) {
+            bloque +=
+              `📦 Orden: ${venta.orderId}\n`;
+          }
+
+          bloque +=
+            `🕘 ${fechaHoraArgentina(venta.fecha)}`;
+
+          return bloque;
+        })
+        .join("\n\n");
+  }
+
+  texto +=
+    "\n\n— Recargas JS —" +
+    "\nℹ️ El historial actual se reinicia si Render reinicia el servicio.";
+
+  return texto;
+}
+
 function construirResumenDia() {
   const hoy =
     fechaArgentinaKey();
@@ -1023,6 +1159,10 @@ function tecladoPrincipal() {
         {
           text: "📊 Resumen del día",
           callback_data: "resumen_dia"
+        },
+        {
+          text: "📜 Historial",
+          callback_data: "historial"
         }
       ],
       [
@@ -2956,7 +3096,8 @@ if (
       PRECIOS_PROMO_RD[
         paquete
       ],
-    costoUsd: 0
+    costoUsd: 0,
+    estado: "promo_manual"
   });
 
   sessions.set(
@@ -2982,6 +3123,20 @@ if (
     `💵 Venta: ${precioPesos(PRECIOS_PROMO_RD[paquete])}\n\n` +
     "La venta fue sumada al resumen del día.\n" +
     "No se realizó ninguna recarga automática.",
+    tecladoVolver()
+  );
+
+  return;
+}
+
+// HISTORIAL
+if (
+  data === "historial"
+) {
+  await editarMensaje(
+    chatId,
+    messageId,
+    construirHistorial(),
     tecladoVolver()
   );
 
@@ -3330,6 +3485,11 @@ if (
           texto +=
             "\n\n✅ Entrega confirmada manualmente por vos.\n\n— Recargas JS —";
 
+          actualizarEstadoVenta(
+            orderId,
+            "recibida"
+          );
+
           mensajesOrdenes.delete(
             orderId
           );
@@ -3381,6 +3541,11 @@ if (
           texto +=
             "\n\n❌ Los diamantes todavía no fueron confirmados en la cuenta.\n" +
             "No repitas la recarga para evitar un cobro doble.\n\n— Recargas JS —";
+
+          actualizarEstadoVenta(
+            orderId,
+            "no_recibida"
+          );
 
           await editarMensaje(
             chatId,
@@ -4265,7 +4430,8 @@ if (
                   Number(
                     order.price
                   ) || 0,
-                orderId
+                orderId,
+                estado: "procesando"
               });
 
               sessions.set(
@@ -4522,6 +4688,49 @@ app.post(
       payload.product ??
       payload.product_name ??
       null;
+
+    let estadoHistorial =
+      null;
+
+    if (
+      [
+        "SUCCESS",
+        "COMPLETED",
+        "COMPLETE",
+        "SUCCESSFUL"
+      ].includes(status)
+    ) {
+      estadoHistorial =
+        "por_verificar";
+    } else if (
+      [
+        "FAILED",
+        "FAIL",
+        "CANCELLED",
+        "CANCELED",
+        "REJECTED"
+      ].includes(status)
+    ) {
+      estadoHistorial =
+        "fallida";
+    } else if (
+      [
+        "PENDING",
+        "PROCESSING",
+        "IN_PROGRESS",
+        "QUEUED"
+      ].includes(status)
+    ) {
+      estadoHistorial =
+        "procesando";
+    }
+
+    if (estadoHistorial) {
+      actualizarEstadoVenta(
+        orderId,
+        estadoHistorial
+      );
+    }
 
     const claveAviso =
       `${orderId}:${status}`;
