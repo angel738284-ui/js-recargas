@@ -850,10 +850,10 @@ function obtenerDatosOrden(respuesta, orderId) {
   ) {
     icono = "✅";
     titulo =
-      "GOXTOP MARCÓ LA ORDEN COMO COMPLETADA";
+      "PROCESADA POR GOXTOP — ENTREGA POR VERIFICAR";
     descripcion =
-      "⚠️ Este es el estado informado por GoXTop.\n" +
-      "Confirmá que los diamantes aparecieron en la cuenta antes de dar la venta por cerrada.";
+      "🟡 GoXTop informó que terminó de procesar la orden.\n" +
+      "Esto NO confirma que los diamantes ya estén en la cuenta.";
   } else if (
     status === "FAILED" ||
     status === "FAIL" ||
@@ -1088,6 +1088,33 @@ function tecladoOrdenAuto() {
         {
           text: "💎 Nueva recarga",
           callback_data: "nueva"
+        }
+      ],
+      [
+        {
+          text: "🏠 Menú principal",
+          callback_data: "menu"
+        }
+      ]
+    ]
+  };
+}
+
+function tecladoConfirmarEntrega(orderId) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "✅ Ya llegaron",
+          callback_data:
+            `entrega_ok:${orderId}`
+        }
+      ],
+      [
+        {
+          text: "⚠️ No llegaron",
+          callback_data:
+            `entrega_no:${orderId}`
         }
       ],
       [
@@ -3265,6 +3292,125 @@ if (
           return;
         }
 
+        // CONFIRMAR ENTREGA DE DIAMANTES
+        if (
+          data.startsWith(
+            "entrega_ok:"
+          )
+        ) {
+          const orderId =
+            data.substring(
+              "entrega_ok:".length
+            );
+
+          const seguimiento =
+            mensajesOrdenes.get(
+              orderId
+            );
+
+          let texto =
+            "✅ DIAMANTES RECIBIDOS\n\n" +
+            `📦 Orden: ${orderId}`;
+
+          if (seguimiento?.userid) {
+            texto +=
+              `\n🆔 ID: ${seguimiento.userid}`;
+          }
+
+          if (seguimiento?.nickname) {
+            texto +=
+              `\n👤 Nombre: ${seguimiento.nickname}`;
+          }
+
+          if (seguimiento?.producto) {
+            texto +=
+              `\n💎 Producto: ${seguimiento.producto}`;
+          }
+
+          texto +=
+            "\n\n✅ Entrega confirmada manualmente por vos.\n\n— Recargas JS —";
+
+          mensajesOrdenes.delete(
+            orderId
+          );
+
+          await editarMensaje(
+            chatId,
+            messageId,
+            texto,
+            tecladoOrdenAuto()
+          );
+
+          return;
+        }
+
+        if (
+          data.startsWith(
+            "entrega_no:"
+          )
+        ) {
+          const orderId =
+            data.substring(
+              "entrega_no:".length
+            );
+
+          const seguimiento =
+            mensajesOrdenes.get(
+              orderId
+            );
+
+          let texto =
+            "⚠️ ENTREGA NO RECIBIDA\n\n" +
+            `📦 Orden: ${orderId}`;
+
+          if (seguimiento?.userid) {
+            texto +=
+              `\n🆔 ID: ${seguimiento.userid}`;
+          }
+
+          if (seguimiento?.nickname) {
+            texto +=
+              `\n👤 Nombre: ${seguimiento.nickname}`;
+          }
+
+          if (seguimiento?.producto) {
+            texto +=
+              `\n💎 Producto: ${seguimiento.producto}`;
+          }
+
+          texto +=
+            "\n\n❌ Los diamantes todavía no fueron confirmados en la cuenta.\n" +
+            "No repitas la recarga para evitar un cobro doble.\n\n— Recargas JS —";
+
+          await editarMensaje(
+            chatId,
+            messageId,
+            texto,
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text:
+                      "✅ Ya llegaron",
+                    callback_data:
+                      `entrega_ok:${orderId}`
+                  }
+                ],
+                [
+                  {
+                    text:
+                      "🏠 Menú principal",
+                    callback_data:
+                      "menu"
+                  }
+                ]
+              ]
+            }
+          );
+
+          return;
+        }
+
         // ACTUALIZAR ESTADO
         if (
           data.startsWith(
@@ -4417,9 +4563,9 @@ app.post(
           "SUCCESSFUL"
         ].includes(status)
       ) {
-        icono = "✅";
+        icono = "🟡";
         titulo =
-          "GOXTOP MARCÓ LA ORDEN COMO COMPLETADA";
+          "PROCESADA POR GOXTOP — ENTREGA POR VERIFICAR";
       } else if (
         [
           "FAILED",
@@ -4500,7 +4646,7 @@ app.post(
         ].includes(status)
       ) {
         aviso +=
-          "\n\n⚠️ Confirmá que los diamantes aparecieron en la cuenta antes de dar la venta por cerrada.";
+          "\n\n⚠️ GoXTop terminó de procesar la orden, pero todavía tenés que confirmar si los diamantes llegaron a la cuenta.";
       }
 
       aviso +=
@@ -4521,11 +4667,23 @@ app.post(
 
       try {
         if (seguimiento) {
+          const tecladoWebhook =
+            [
+              "SUCCESS",
+              "COMPLETED",
+              "COMPLETE",
+              "SUCCESSFUL"
+            ].includes(status)
+              ? tecladoConfirmarEntrega(
+                  orderId
+                )
+              : tecladoOrdenAuto();
+
           await editarMensaje(
             seguimiento.chatId,
             seguimiento.messageId,
             aviso,
-            tecladoOrdenAuto()
+            tecladoWebhook
           );
 
           // Conservamos la orden asociada al mensaje aunque GoXTop
@@ -4536,13 +4694,27 @@ app.post(
         } else {
           // Respaldo: si Render se reinició o el usuario salió de
           // la pantalla de la orden, igualmente se envía el aviso.
+          const tecladoRespaldo =
+            orderId ===
+              "Orden desconocida"
+              ? null
+              : [
+                  "SUCCESS",
+                  "COMPLETED",
+                  "COMPLETE",
+                  "SUCCESSFUL"
+                ].includes(status)
+                ? tecladoConfirmarEntrega(
+                    orderId
+                  )
+                : tecladoOrden(
+                    orderId
+                  );
+
           await enviarMensaje(
             ADMIN_TELEGRAM_ID,
             aviso,
-            orderId !==
-              "Orden desconocida"
-              ? tecladoOrden(orderId)
-              : null
+            tecladoRespaldo
           );
         }
       } catch (error) {
