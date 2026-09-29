@@ -849,9 +849,11 @@ function obtenerDatosOrden(respuesta, orderId) {
     status === "SUCCESSFUL"
   ) {
     icono = "✅";
-    titulo = "RECARGA COMPLETADA";
+    titulo =
+      "GOXTOP MARCÓ LA ORDEN COMO COMPLETADA";
     descripcion =
-      "GoXTop informa que la orden fue completada.";
+      "⚠️ Este es el estado informado por GoXTop.\n" +
+      "Confirmá que los diamantes aparecieron en la cuenta antes de dar la venta por cerrada.";
   } else if (
     status === "FAILED" ||
     status === "FAIL" ||
@@ -4417,7 +4419,7 @@ app.post(
       ) {
         icono = "✅";
         titulo =
-          "RECARGA COMPLETADA";
+          "GOXTOP MARCÓ LA ORDEN COMO COMPLETADA";
       } else if (
         [
           "FAILED",
@@ -4489,6 +4491,18 @@ app.post(
           `\n💵 Costo: ${seguimiento.costo}`;
       }
 
+      if (
+        [
+          "SUCCESS",
+          "COMPLETED",
+          "COMPLETE",
+          "SUCCESSFUL"
+        ].includes(status)
+      ) {
+        aviso +=
+          "\n\n⚠️ Confirmá que los diamantes aparecieron en la cuenta antes de dar la venta por cerrada.";
+      }
+
       aviso +=
         "\n\n— Recargas JS —";
 
@@ -4514,11 +4528,11 @@ app.post(
             tecladoOrdenAuto()
           );
 
-          if (estadoFinal) {
-            mensajesOrdenes.delete(
-              orderId
-            );
-          }
+          // Conservamos la orden asociada al mensaje aunque GoXTop
+          // informe un estado final. Si luego llega otro webhook
+          // (por ejemplo un cambio de estado o reembolso), el mismo
+          // mensaje podrá actualizarse otra vez.
+          void estadoFinal;
         } else {
           // Respaldo: si Render se reinició o el usuario salió de
           // la pantalla de la orden, igualmente se envía el aviso.
