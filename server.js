@@ -2007,16 +2007,85 @@ if (session?.estado === "esperando_id_promos") {
             )
         );
 
+    const costosGoXTop =
+      new Map();
+
+    try {
+      const catalogoGoXTop =
+        await obtenerProductos();
+
+      if (catalogoGoXTop.ok) {
+        const productosGoXTop =
+          extraerProductos(
+            catalogoGoXTop.data
+          ).filter(
+            p =>
+              p.stockStatus ===
+              "in_stock"
+          );
+
+        for (
+          const producto
+          of productosGoXTop
+        ) {
+          const paquete =
+            normalizarPaqueteVenta(
+              producto
+            );
+
+          if (!paquete) {
+            continue;
+          }
+
+          const clave =
+            paquete === 6160
+              ? 5600
+              : paquete;
+
+          const costo =
+            Number(
+              producto.price
+            );
+
+          if (
+            Number.isFinite(costo)
+          ) {
+            costosGoXTop.set(
+              clave,
+              costo
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error(
+        "No se pudo cargar costos GoXTop para botones:",
+        error
+      );
+    }
+
     const botonesPromo =
       paquetesSinPromo
-        .map(paquete => [
-          {
-            text:
-              `🛒 Preparar ${paquete} · ${precioPesos(PRECIOS_NORMAL_RD[paquete])}`,
-            callback_data:
-              `promo_normal:${paquete}`
-          }
-        ]);
+        .map(paquete => {
+          const costo =
+            costosGoXTop.get(
+              paquete
+            );
+
+          const textoCosto =
+            Number.isFinite(costo)
+              ? ` · ${costo.toFixed(3)} USD`
+              : "";
+
+          return [
+            {
+              text:
+                `🛒 Preparar ${paquete}${textoCosto}`,
+              callback_data:
+                `promo_normal:${paquete}`
+            }
+          ];
+        });
 
     botonesPromo.push(
       [
