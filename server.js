@@ -1376,6 +1376,296 @@ async function cargarProductos(
   }
 }
 
+async function prepararRecargaNormalDesdePromo(
+  chatId,
+  messageId,
+  session,
+  paquete
+) {
+  if (modoMantenimiento) {
+    await editarMensaje(
+      chatId,
+      messageId,
+      "🛠 MODO MANTENIMIENTO\n\n" +
+      "Las recargas están temporalmente bloqueadas.",
+      tecladoVolver()
+    );
+    return;
+  }
+
+  await editarMensaje(
+    chatId,
+    messageId,
+    "⏳ PREPARANDO RECARGA\n\n" +
+    `🆔 ID: ${session.userid}\n` +
+    (session.nickname
+      ? `👤 Nombre: ${session.nickname}\n`
+      : "") +
+    `💎 Paquete: ${paquete}\n\n` +
+    "Buscando el producto en GoXTop..."
+  );
+
+  try {
+    const catalogo =
+      await obtenerProductos();
+
+    if (!catalogo.ok) {
+      throw new Error(
+        "No se pudo consultar el catálogo"
+      );
+    }
+
+    const productos =
+      extraerProductos(
+        catalogo.data
+      ).filter(
+        p =>
+          p.stockStatus ===
+          "in_stock"
+      );
+
+    const producto =
+      productos.find(p => {
+        const normalizado =
+          normalizarPaqueteVenta(p);
+
+        if (paquete === 5600) {
+          return (
+            normalizado === 5600 ||
+            normalizado === 6160
+          );
+        }
+
+        return normalizado === paquete;
+      });
+
+    if (!producto) {
+      await editarMensaje(
+        chatId,
+        messageId,
+        "❌ PRODUCTO NO DISPONIBLE\n\n" +
+        `💎 Paquete: ${paquete}\n` +
+        "GoXTop no lo tiene disponible en este momento.",
+        {
+          inline_keyboard: [
+            [
+              {
+                text:
+                  "🔥 Volver a promos",
+                callback_data:
+                  "promos_rd"
+              }
+            ],
+            [
+              {
+                text:
+                  "🏠 Menú",
+                callback_data:
+                  "menu"
+              }
+            ]
+          ]
+        }
+      );
+      return;
+    }
+
+    session.producto =
+      producto;
+
+    session.estado =
+      "confirmando";
+
+    sessions.set(
+      String(chatId),
+      session
+    );
+
+    const saldoResult =
+      await obtenerSaldo();
+
+    const saldo =
+      extraerSaldo(
+        saldoResult.data
+      );
+
+    const costo =
+      Number(
+        producto.price
+      );
+
+    if (
+      !saldoResult.ok ||
+      saldo === null ||
+      !Number.isFinite(costo)
+    ) {
+      session.estado =
+        "promo_resultado";
+
+      sessions.set(
+        String(chatId),
+        session
+      );
+
+      await editarMensaje(
+        chatId,
+        messageId,
+        "⚠️ NO SE PUDO CONSULTAR EL SALDO\n\n" +
+        `🆔 ID: ${session.userid}\n` +
+        (session.nickname
+          ? `👤 Nombre: ${session.nickname}\n`
+          : "") +
+        `💎 Producto: ${producto.name}\n\n` +
+        "La recarga NO fue enviada.",
+        {
+          inline_keyboard: [
+            [
+              {
+                text:
+                  "🔄 Intentar nuevamente",
+                callback_data:
+                  `promo_normal:${paquete}`
+              }
+            ],
+            [
+              {
+                text:
+                  "🏠 Menú",
+                callback_data:
+                  "menu"
+              }
+            ]
+          ]
+        }
+      );
+      return;
+    }
+
+    const restante =
+      saldo - costo;
+
+    session.saldoAntes =
+      saldo;
+
+    session.saldoDespues =
+      restante;
+
+    sessions.set(
+      String(chatId),
+      session
+    );
+
+    if (restante < 0) {
+      const faltante =
+        Math.abs(
+          restante
+        );
+
+      session.estado =
+        "saldo_insuficiente";
+
+      sessions.set(
+        String(chatId),
+        session
+      );
+
+      await editarMensaje(
+        chatId,
+        messageId,
+        "⚠️ SALDO INSUFICIENTE\n\n" +
+        `🆔 ID: ${session.userid}\n` +
+        (session.nickname
+          ? `👤 Nombre: ${session.nickname}\n`
+          : "") +
+        `💎 Producto: ${producto.name}\n` +
+        `💵 Costo GoXTop: ${costo.toFixed(3)} USD\n\n` +
+        `💰 Saldo actual: ${saldo.toFixed(3)} USD\n` +
+        `❌ Te faltan: ${faltante.toFixed(3)} USD\n\n` +
+        "La recarga NO fue enviada.",
+        tecladoVolver()
+      );
+      return;
+    }
+
+    await editarMensaje(
+      chatId,
+      messageId,
+      "💎 CONFIRMAR RECARGA\n\n" +
+      `🆔 ID: ${session.userid}\n` +
+      (session.nickname
+        ? `👤 Nombre: ${session.nickname}\n`
+        : "") +
+      `💎 Producto: ${producto.name}\n` +
+      `💵 Venta: ${precioPesos(PRECIOS_NORMAL_RD[paquete])}\n` +
+      `💳 Costo GoXTop: ${costo.toFixed(3)} USD\n\n` +
+      `💰 Saldo actual: ${saldo.toFixed(3)} USD\n` +
+      `💸 Después: ${restante.toFixed(3)} USD\n\n` +
+      "Revisá los datos antes de continuar.",
+      {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "✅ Confirmar",
+              callback_data:
+                "confirmar"
+            }
+          ],
+          [
+            {
+              text:
+                "❌ Cancelar",
+              callback_data:
+                "cancelar"
+            }
+          ]
+        ]
+      }
+    );
+
+  } catch (error) {
+    console.error(
+      "Error preparando recarga desde promos:",
+      error
+    );
+
+    session.estado =
+      "promo_resultado";
+
+    sessions.set(
+      String(chatId),
+      session
+    );
+
+    await editarMensaje(
+      chatId,
+      messageId,
+      "⚠️ NO SE PUDO PREPARAR LA RECARGA\n\n" +
+      "No se realizó ninguna recarga.",
+      {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "🔄 Intentar nuevamente",
+              callback_data:
+                `promo_normal:${paquete}`
+            }
+          ],
+          [
+            {
+              text:
+                "🏠 Menú",
+              callback_data:
+                "menu"
+            }
+          ]
+        ]
+      }
+    );
+  }
+}
+
 // ======================================================
 // TELEGRAM WEBHOOK
 // ======================================================
@@ -1708,19 +1998,23 @@ if (session?.estado === "esperando_id_promos") {
       session
     );
 
+    const paquetesSinPromo =
+      PAQUETES_PROMO_RD
+        .filter(
+          paquete =>
+            !promosActivas.has(
+              paquete
+            )
+        );
+
     const botonesPromo =
-      Array.from(
-        promosActivas
-      )
-        .sort(
-          (a, b) => a - b
-        )
+      paquetesSinPromo
         .map(paquete => [
           {
             text:
-              `🛒 Preparar ${paquete} · ${precioPesos(PRECIOS_PROMO_RD[paquete])}`,
+              `🛒 Preparar ${paquete} · ${precioPesos(PRECIOS_NORMAL_RD[paquete])}`,
             callback_data:
-              `promo_venta:${paquete}`
+              `promo_normal:${paquete}`
           }
         ]);
 
@@ -2319,6 +2613,67 @@ if (data === "promos_rd") {
   return;
 }
 
+// PREPARAR RECARGA NORMAL DESDE CONSULTA DE PROMOS
+if (
+  data.startsWith(
+    "promo_normal:"
+  )
+) {
+  session =
+    sessions.get(
+      String(chatId)
+    ) || {};
+
+  const paquete =
+    Number(
+      data.substring(
+        "promo_normal:".length
+      )
+    );
+
+  const consulta =
+    session.promoConsulta;
+
+  if (
+    !consulta ||
+    !PAQUETES_PROMO_RD.includes(
+      paquete
+    ) ||
+    consulta.promosActivas
+      ?.includes(paquete)
+  ) {
+    await editarMensaje(
+      chatId,
+      messageId,
+      "⚠️ ESTE PAQUETE TIENE PROMO\n\n" +
+      "Las promos no se pueden comprar automáticamente por API.\n" +
+      "No se realizó ninguna recarga.",
+      tecladoVolver()
+    );
+    return;
+  }
+
+  session.userid =
+    consulta.userid;
+
+  session.nickname =
+    consulta.nickname;
+
+  sessions.set(
+    String(chatId),
+    session
+  );
+
+  await prepararRecargaNormalDesdePromo(
+    chatId,
+    messageId,
+    session,
+    paquete
+  );
+
+  return;
+}
+
 // PREPARAR VENTA PROMO
 if (
   data.startsWith(
@@ -2367,7 +2722,7 @@ if (
   await editarMensaje(
     chatId,
     messageId,
-    "🛒 VENTA PROMO PREPARADA\n\n" +
+    "🛒 REGISTRO MANUAL DE PROMO\n\n" +
     `🆔 ID: ${consulta.userid}\n` +
     (
       consulta.nickname
