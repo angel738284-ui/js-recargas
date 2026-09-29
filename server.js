@@ -23,6 +23,10 @@ let modoMantenimiento = false;
 // Evita avisos repetidos si GoXTop reenvía el mismo estado.
 const estadosWebhookNotificados = new Map();
 
+// Relaciona una orden nueva con el mensaje de Telegram que debe
+// actualizarse automáticamente cuando llegue el webhook de GoXTop.
+const mensajesOrdenes = new Map();
+
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString("utf8");
@@ -1073,6 +1077,46 @@ function tecladoOrden(orderId) {
       ]
     ]
   };
+}
+
+function tecladoOrdenAuto() {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "💎 Nueva recarga",
+          callback_data: "nueva"
+        }
+      ],
+      [
+        {
+          text: "🏠 Menú principal",
+          callback_data: "menu"
+        }
+      ]
+    ]
+  };
+}
+
+function desvincularMensajeOrden(
+  chatId,
+  messageId
+) {
+  for (
+    const [orderId, seguimiento]
+    of mensajesOrdenes
+  ) {
+    if (
+      String(seguimiento.chatId) ===
+        String(chatId) &&
+      Number(seguimiento.messageId) ===
+        Number(messageId)
+    ) {
+      mensajesOrdenes.delete(
+        orderId
+      );
+    }
+  }
 }
 
 // ======================================================
@@ -2437,6 +2481,11 @@ if (session?.estado === "esperando_id_promos") {
 
         // MENÚ
         if (data === "menu") {
+          desvincularMensajeOrden(
+            chatId,
+            messageId
+          );
+
           sessions.set(
             String(chatId),
             {
@@ -3034,6 +3083,11 @@ if (
 
         // NUEVA RECARGA
         if (data === "nueva") {
+          desvincularMensajeOrden(
+            chatId,
+            messageId
+          );
+
           if (modoMantenimiento) {
             await editarMensaje(
               chatId,
@@ -4077,23 +4131,50 @@ if (
                 }
               );
 
+              mensajesOrdenes.set(
+                orderId,
+                {
+                  chatId,
+                  messageId,
+                  userid:
+                    order.userid,
+                  nickname,
+                  producto:
+                    order.cantidad,
+                  costo:
+                    order.price
+                }
+              );
+
+              if (
+                mensajesOrdenes.size >
+                300
+              ) {
+                const primeraOrden =
+                  mensajesOrdenes
+                    .keys()
+                    .next()
+                    .value;
+
+                mensajesOrdenes.delete(
+                  primeraOrden
+                );
+              }
+
               await editarMensaje(
                 chatId,
                 messageId,
-                "✅ PEDIDO ACEPTADO\n\n" +
+                "⏳ PEDIDO ACEPTADO\n\n" +
                 `🆔 ID: ${order.userid}\n` +
                 (nickname
                   ? `👤 Nombre: ${nickname}\n`
                   : "") +
                 `💎 Producto: ${order.cantidad}\n` +
-                `💵 Costo: $${order.price}\n\n` +
+                `💵 Costo: ${order.price}\n\n` +
                 "📦 Orden:\n" +
                 `${orderId}\n\n` +
-                "GoXTop aceptó el pedido.\n" +
-                "Podés consultar su estado abajo.",
-                tecladoOrden(
-                  orderId
-                )
+                "🔄 El estado se actualizará automáticamente cuando GoXTop responda.",
+                tecladoOrdenAuto()
               );
 
               return;
@@ -4362,30 +4443,94 @@ app.post(
           "RECARGA EN PROCESO";
       }
 
+      const seguimiento =
+        mensajesOrdenes.get(
+          orderId
+        );
+
+      const idMostrar =
+        userid ??
+        seguimiento?.userid ??
+        null;
+
+      const productoMostrar =
+        producto ??
+        seguimiento?.producto ??
+        null;
+
       let aviso =
         `${icono} ${titulo}\n\n` +
         `📦 Orden: ${orderId}\n` +
         `📡 Estado: ${statusRaw}`;
 
-      if (userid) {
+      if (idMostrar) {
         aviso +=
-          `\n🆔 ID: ${userid}`;
+          `\n🆔 ID: ${idMostrar}`;
       }
 
-      if (producto) {
+      if (
+        seguimiento?.nickname
+      ) {
         aviso +=
-          `\n💎 Producto: ${producto}`;
+          `\n👤 Nombre: ${seguimiento.nickname}`;
       }
+
+      if (productoMostrar) {
+        aviso +=
+          `\n💎 Producto: ${productoMostrar}`;
+      }
+
+      if (
+        seguimiento?.costo !==
+          undefined &&
+        seguimiento?.costo !== null
+      ) {
+        aviso +=
+          `\n💵 Costo: ${seguimiento.costo}`;
+      }
+
+      aviso +=
+        "\n\n— Recargas JS —";
+
+      const estadoFinal =
+        [
+          "SUCCESS",
+          "COMPLETED",
+          "COMPLETE",
+          "SUCCESSFUL",
+          "FAILED",
+          "FAIL",
+          "CANCELLED",
+          "CANCELED",
+          "REJECTED"
+        ].includes(status);
 
       try {
-        await enviarMensaje(
-          ADMIN_TELEGRAM_ID,
-          aviso,
-          orderId !==
-            "Orden desconocida"
-            ? tecladoOrden(orderId)
-            : null
-        );
+        if (seguimiento) {
+          await editarMensaje(
+            seguimiento.chatId,
+            seguimiento.messageId,
+            aviso,
+            tecladoOrdenAuto()
+          );
+
+          if (estadoFinal) {
+            mensajesOrdenes.delete(
+              orderId
+            );
+          }
+        } else {
+          // Respaldo: si Render se reinició o el usuario salió de
+          // la pantalla de la orden, igualmente se envía el aviso.
+          await enviarMensaje(
+            ADMIN_TELEGRAM_ID,
+            aviso,
+            orderId !==
+              "Orden desconocida"
+              ? tecladoOrden(orderId)
+              : null
+          );
+        }
       } catch (error) {
         console.error(
           "Error aviso webhook:",
