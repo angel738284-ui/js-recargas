@@ -27,6 +27,9 @@ const estadosWebhookNotificados = new Map();
 // actualizarse automáticamente cuando llegue el webhook de GoXTop.
 const mensajesOrdenes = new Map();
 
+// Chats donde ya activamos el botón fijo de inicio.
+const tecladoInicioActivado = new Set();
+
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString("utf8");
@@ -122,6 +125,48 @@ async function responderBoton(callbackId, text = null) {
   }
 
   return telegram("answerCallbackQuery", body);
+}
+
+function tecladoInicioPermanente() {
+  return {
+    keyboard: [
+      [
+        {
+          text: "🏠 Inicio"
+        }
+      ]
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder:
+      "Tocá 🏠 Inicio para abrir el menú"
+  };
+}
+
+async function activarBotonInicio(chatId) {
+  const clave =
+    String(chatId);
+
+  if (
+    tecladoInicioActivado.has(
+      clave
+    )
+  ) {
+    return;
+  }
+
+  const result =
+    await enviarMensaje(
+      chatId,
+      "🏠 Acceso rápido activado.",
+      tecladoInicioPermanente()
+    );
+
+  if (result?.ok) {
+    tecladoInicioActivado.add(
+      clave
+    );
+  }
 }
 
 function esAdmin(chatId) {
@@ -1913,8 +1958,24 @@ app.post(
           return;
         }
 
-        // /start
-        if (text === "/start") {
+        // /start o botón fijo de inicio
+        if (
+          text === "/start" ||
+          text === "🏠 Inicio"
+        ) {
+          if (
+            text === "🏠 Inicio"
+          ) {
+            await borrarMensaje(
+              chatId,
+              message.message_id
+            );
+          }
+
+          await activarBotonInicio(
+            chatId
+          );
+
           const oldSession =
             sessions.get(
               String(chatId)
