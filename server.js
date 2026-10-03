@@ -458,27 +458,129 @@ async function consultarPromosRD(userid) {
     "?id=" +
     encodeURIComponent(userid);
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      "Accept": "application/json",
-      "X-API-Key": process.env.VOLSEVER_API_KEY
+  let ultimoError = null;
+
+  for (let intento = 1; intento <= 2; intento++) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "X-API-Key": process.env.VOLSEVER_API_KEY
+        }
+      });
+
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
+
+      const resultado = {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
+
+      // Reintentar una sola vez únicamente ante errores temporales del servidor.
+      if (
+        intento === 1 &&
+        response.status >= 500
+      ) {
+        ultimoError = resultado;
+        await new Promise(
+          resolve => setTimeout(resolve, 1200)
+        );
+        continue;
+      }
+
+      return resultado;
+
+    } catch (error) {
+      ultimoError = {
+        ok: false,
+        status: 0,
+        data: {
+          message:
+            error?.message ||
+            "Error de conexión con Volsever"
+        }
+      };
+
+      if (intento === 1) {
+        await new Promise(
+          resolve => setTimeout(resolve, 1200)
+        );
+        continue;
+      }
     }
-  });
-
-  let data;
-
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
   }
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    data
+  return ultimoError || {
+    ok: false,
+    status: 0,
+    data: {
+      message:
+        "No se pudo conectar con Volsever"
+    }
   };
+}
+
+function detalleErrorVolsever(resultado) {
+  const status =
+    Number(resultado?.status || 0);
+
+  const mensajeApi =
+    resultado?.data?.message ??
+    resultado?.data?.error ??
+    resultado?.data?.detail ??
+    "";
+
+  if (status === 401) {
+    return (
+      "🔐 Error 401: la API key de Volsever fue rechazada.\n" +
+      "Puede estar vencida, revocada o no ser válida."
+    );
+  }
+
+  if (status === 402) {
+    return (
+      "💳 Error 402: Volsever indica falta de saldo/créditos o acceso de pago."
+    );
+  }
+
+  if (status === 403) {
+    return (
+      "🚫 Error 403: tu cuenta/API key no tiene permiso para este endpoint o plan."
+    );
+  }
+
+  if (status === 429) {
+    return (
+      "⏱ Error 429: se alcanzó el límite de consultas de Volsever."
+    );
+  }
+
+  if (status >= 500) {
+    return (
+      `🛠 Error ${status}: Volsever está teniendo un problema temporal.`
+    );
+  }
+
+  if (status === 0) {
+    return (
+      "🌐 No se pudo conectar con Volsever."
+    );
+  }
+
+  return (
+    `⚠️ Volsever respondió con HTTP ${status || "desconocido"}` +
+    (mensajeApi
+      ? `\n📝 ${String(mensajeApi).slice(0, 180)}`
+      : "")
+  );
 }
 
 function extraerPromosRD(data) {
@@ -2191,8 +2293,21 @@ if (session?.estado === "esperando_id_promos") {
       !resultado.ok ||
       resultado.data?.status === false
     ) {
-      throw new Error(
-        "Volsever no disponible"
+      const detalle =
+        detalleErrorVolsever(
+          resultado
+        );
+
+      throw Object.assign(
+        new Error(
+          "Volsever no disponible"
+        ),
+        {
+          detalleVolsever:
+            detalle,
+          resultadoVolsever:
+            resultado
+        }
       );
     }
 
@@ -2399,11 +2514,16 @@ if (session?.estado === "esperando_id_promos") {
       session
     );
 
+    const detalle =
+      error?.detalleVolsever ||
+      "🌐 No se pudo completar la consulta con Volsever.";
+
     await editarMensaje(
       chatId,
       session.panelMessageId,
       "⚠️ NO SE PUDIERON CONSULTAR LAS PROMOS\n\n" +
-      "No se realizó ninguna recarga.",
+      detalle +
+      "\n\nNo se realizó ninguna recarga.",
       tecladoVolver()
     );
   }
