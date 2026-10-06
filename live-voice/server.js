@@ -330,6 +330,25 @@ let listening=false;
 let busy=false;
 let pending='';
 let restarting=false;
+let phraseBuffer='';
+let latestInterim='';
+let silenceTimer=null;
+
+function schedulePhraseFlush(){
+  if(silenceTimer)clearTimeout(silenceTimer);
+  silenceTimer=setTimeout(()=>{
+    silenceTimer=null;
+    if(busy||!autoMode)return;
+    const text=(phraseBuffer+' '+latestInterim).replace(/\s+/g,' ').trim();
+    phraseBuffer='';
+    latestInterim='';
+    if(text){
+      pending=text;
+      heardEl.textContent='Entendí: “'+text+'”';
+      sendPhrase(text);
+    }
+  },950);
+}
 
 async function unlockAudio(){
   try{
@@ -362,12 +381,18 @@ function buildRecognition(){
       if(event.results[i].isFinal) finalText+=(finalText?' ':'')+t;
       else interim+=(interim?' ':'')+t;
     }
-    if(interim) heardEl.textContent='Escuchando: “'+interim+'”';
-    if(finalText && !busy){
-      pending=finalText.trim();
-      heardEl.textContent='Entendí: “'+pending+'”';
-      sendPhrase(pending);
+
+    if(finalText){
+      phraseBuffer=(phraseBuffer+' '+finalText).replace(/\s+/g,' ').trim();
+      latestInterim='';
+    }else{
+      latestInterim=interim.trim();
     }
+
+    const preview=(phraseBuffer+' '+latestInterim).replace(/\s+/g,' ').trim();
+    if(preview)heardEl.textContent='Escuchando: “'+preview+'”';
+
+    schedulePhraseFlush();
   };
 
   rec.onerror=(e)=>{
