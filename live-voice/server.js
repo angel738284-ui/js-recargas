@@ -998,6 +998,8 @@ h2{margin:0 0 10px}
 button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-weight:800;margin-top:10px}
 #start{background:#fff;color:#111}
 #stop{background:#333;color:#fff}
+#monitor{background:#2b2b2b;color:#fff}
+#monitor.on{background:#fff;color:#111}
 #status{margin-top:14px;font-weight:700}
 #heard{margin-top:12px;line-height:1.4;min-height:48px}
 .small{opacity:.75;font-size:13px;margin-top:10px}
@@ -1009,6 +1011,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <div>Vos hablás → Fish transcribe → Fish genera tu voz → PRISM. Sin GPT en el medio.</div>
   <button id="start">🟢 Iniciar micrófono AUTO</button>
   <button id="stop">🔴 Detener</button>
+  <button id="monitor">🔇 Escuchar en este celular: OFF</button>
   <div id="status">Detenido</div>
   <div id="heard"></div>
   <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
@@ -1018,6 +1021,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 const KEY=${JSON.stringify(key)};
 const startBtn=document.getElementById('start');
 const stopBtn=document.getElementById('stop');
+const monitorBtn=document.getElementById('monitor');
 const statusEl=document.getElementById('status');
 const heardEl=document.getElementById('heard');
 const audio=document.getElementById('audio');
@@ -1037,6 +1041,16 @@ let phraseStarted=0;
 let threshold=0.026;
 let noiseFloor=0.008;
 let calibratingUntil=0;
+let monitorLocal=false;
+
+monitorBtn.onclick=()=>{
+  monitorLocal=!monitorLocal;
+  audio.muted=!monitorLocal;
+  monitorBtn.textContent=monitorLocal
+    ? '🔊 Escuchar en este celular: ON'
+    : '🔇 Escuchar en este celular: OFF';
+  monitorBtn.classList.toggle('on',monitorLocal);
+};
 
 async function unlockAudio(){
   try{
@@ -1044,7 +1058,7 @@ async function unlockAudio(){
     audio.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
     await audio.play();
     audio.pause();
-    audio.muted=false;
+    audio.muted=!monitorLocal;
   }catch{}
 }
 
@@ -1247,8 +1261,8 @@ events.onmessage=async(ev)=>{
       if(speechActive)finishPhrase();
       busy=true;
       audio.src=msg.url;
-      audio.muted=false;
-      statusEl.textContent='🔊 JS hablando…';
+      audio.muted=!monitorLocal;
+      statusEl.textContent=monitorLocal?'🔊 JS hablando…':'🔇 JS hablando solo en PRISM…';
       await audio.play();
       audio.onended=()=>{
         busy=false;
