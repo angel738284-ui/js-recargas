@@ -4,7 +4,10 @@ const { URL } = require('url');
 const PORT = process.env.PORT || 10000;
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
+const FISH_API_KEY = String(process.env.FISH_API_KEY || '');
+const FISH_REFERENCE_ID = String(process.env.FISH_REFERENCE_ID || 'f79707580f1f4574bb3668d16936b897');
 const clients = new Set();
+const generatedAudio = new Map();
 let lastTestAt = 0;
 let lastBrowserSayAt = 0;
 
@@ -44,6 +47,28 @@ function broadcast(message) {
 }
 
 async function makeVoice(text) {
+  if (FISH_API_KEY) {
+    const r = await fetch('https://api.fish.audio/v1/tts', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + FISH_API_KEY,
+        'Content-Type': 'application/json',
+        'model': 's2.1-pro-free'
+      },
+      body: JSON.stringify({
+        text,
+        reference_id: FISH_REFERENCE_ID,
+        format: 'mp3'
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+    if (!r.ok) throw new Error('fish_http_' + r.status + ': ' + (await r.text()).slice(0,300));
+    const buf = Buffer.from(await r.arrayBuffer());
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+    generatedAudio.set(id, { buf, expires: Date.now() + 10 * 60 * 1000 });
+    return '/audio/' + id + '.mp3';
+  }
+
   const payload = {
     jsonrpc: '2.0',
     id: Date.now(),
@@ -270,12 +295,31 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: 'js-live-voice',
       connected_players: clients.size,
-      voice_mcp: true
+      voice_mcp: true,
+      fish_direct: Boolean(FISH_API_KEY),
+      fish_reference_id: FISH_REFERENCE_ID
     });
   }
 
   if (req.method === 'GET' && u.pathname === '/keepalive') {
     return json(res, 200, { ok: true, now: Date.now() });
+  }
+
+  if (req.method === 'GET' && u.pathname.startsWith('/audio/')) {
+    const id = u.pathname.replace('/audio/','').replace(/\.mp3$/,'');
+    const item = generatedAudio.get(id);
+    if (!item || item.expires < Date.now()) {
+      generatedAudio.delete(id);
+      res.writeHead(404);
+      return res.end();
+    }
+    res.writeHead(200, {
+      'content-type': 'audio/mpeg',
+      'content-length': item.buf.length,
+      'cache-control': 'no-store',
+      'access-control-allow-origin': '*'
+    });
+    return res.end(item.buf);
   }
 
   if (req.method === 'GET' && u.pathname === '/prism') {
@@ -369,6 +413,9 @@ setInterval(() => {
   for (const res of [...clients]) {
     try { res.write(': ping ' + Date.now() + '\n\n'); }
     catch { clients.delete(res); }
+  }
+  for (const [id, item] of generatedAudio) {
+    if (item.expires < Date.now()) generatedAudio.delete(id);
   }
 }, 25000);
 
