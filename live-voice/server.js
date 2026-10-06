@@ -990,7 +990,7 @@ function makeControlPage(key) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JS Live Voice · AUTO</title>
+<title>JS Live Voice · RÁPIDO</title>
 <style>
 body{margin:0;background:#111;color:#fff;font-family:system-ui;padding:18px}
 .card{max-width:560px;margin:auto;background:#1b1b1b;border-radius:18px;padding:18px}
@@ -1005,13 +1005,13 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 </head>
 <body>
 <div class="card">
-  <h2>JS Live Voice · AUTO</h2>
-  <div>Fish escucha tu audio directamente. Al terminar una frase, la transcribe y la reproduce con la voz de JS.</div>
+  <h2>JS Live Voice · RÁPIDO</h2>
+  <div>Vos hablás → Fish transcribe → Fish genera tu voz → PRISM. Sin GPT en el medio.</div>
   <button id="start">🟢 Iniciar micrófono AUTO</button>
   <button id="stop">🔴 Detener</button>
   <div id="status">Detenido</div>
   <div id="heard"></div>
-  <div class="small">El micrófono se pausa mientras habla JS para evitar eco.</div>
+  <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
 </div>
 <audio id="audio" playsinline></audio>
 <script>
@@ -1135,8 +1135,9 @@ async function sendRecordedPhrase(){
       }
       throw new Error(j.error||'asr_failed');
     }
-    heardEl.textContent='Entendí: “'+j.text+'”';
-    statusEl.textContent='🔊 Esperando voz JS…';
+    const secs=Number(j.total_ms||0)/1000;
+    heardEl.textContent='Entendí: “'+j.text+'”'+(secs?' · '+secs.toFixed(1)+' s':'');
+    statusEl.textContent='🔊 Voz JS lista…';
   }catch(e){
     busy=false;
     statusEl.textContent='Error de transcripción';
@@ -1165,7 +1166,7 @@ function vadLoop(){
         silenceSince=0;
       }else{
         if(!silenceSince)silenceSince=now;
-        if(now-silenceSince>850)finishPhrase();
+        if(now-silenceSince>450)finishPhrase();
       }
 
       if(now-phraseStarted>14000)finishPhrase();
@@ -1207,7 +1208,7 @@ async function startAuto(){
   speechActive=false;
   noiseFloor=0.006;
   threshold=0.016;
-  calibratingUntil=Date.now()+700;
+  calibratingUntil=Date.now()+500;
   statusEl.textContent='🎙️ Calibrando ruido… hablá en un segundo';
   vadLoop();
 }
@@ -1667,14 +1668,15 @@ const server = http.createServer(async (req, res) => {
     if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
 
     try {
+      const startedAt = Date.now();
       const audio = await readBuffer(req);
       if (audio.length < 800) return json(res, 400, { ok: false, error: 'audio_too_short' });
 
       const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
-      const [tx, acousticMetrics] = await Promise.all([
-        transcribeVoice(audio, contentType),
-        analyzeAudioProsody(audio).catch(() => null)
-      ]);
+
+      // Fast path for LIVE: no GPT and no acoustic/prosody analysis.
+      const tx = await transcribeVoice(audio, contentType);
+      const asrMs = Date.now() - startedAt;
       const text = tx.text;
 
       if (!text) return json(res, 422, { ok: false, error: 'no_speech_detected' });
@@ -1687,30 +1689,32 @@ const server = http.createServer(async (req, res) => {
       }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
-      const prosody = detectProsody(text, acousticMetrics);
-      const styledText = (prosody.tags.length ? prosody.tags.join(' ') + ' ' : '') + text;
-      const audioUrl = await makeVoice(styledText);
+      const ttsStartedAt = Date.now();
+      const audioUrl = await makeVoice(text);
+      const ttsMs = Date.now() - ttsStartedAt;
+      const totalMs = Date.now() - startedAt;
+
       broadcast({
         type: 'audio',
         url: audioUrl,
         text,
-        style: prosody.label,
+        style: 'fast',
         at: Date.now(),
-        asr: 'fish'
+        asr: 'fish',
+        asr_ms: asrMs,
+        tts_ms: ttsMs,
+        total_ms: totalMs
       });
 
       return json(res, 200, {
         ok: true,
         text,
-        style_label: prosody.label,
-        style_metrics: {
-          dbfs: prosody.dbfs,
-          peak_dbfs: prosody.peakDbfs,
-          variation: prosody.variation,
-          words_per_second: prosody.wordsPerSecond
-        },
+        style_label: 'fast',
         language_code: tx.language_code || 'es',
         audio_url: audioUrl,
+        asr_ms: asrMs,
+        tts_ms: ttsMs,
+        total_ms: totalMs,
         connected_players: clients.size
       });
     } catch (e) {
