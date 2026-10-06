@@ -1135,8 +1135,10 @@ async function sendRecordedPhrase(){
       }
       throw new Error(j.error||'asr_failed');
     }
-    const secs=Number(j.total_ms||0)/1000;
-    heardEl.textContent='Entendí: “'+j.text+'”'+(secs?' · '+secs.toFixed(1)+' s':'');
+    const asrSecs=Number(j.asr_ms||0)/1000;
+    const ttsSecs=Number(j.tts_ms||0)/1000;
+    const totalSecs=Number(j.total_ms||0)/1000;
+    heardEl.textContent='Entendí: “'+j.text+'”'+(totalSecs?' · ASR '+asrSecs.toFixed(1)+' s + voz '+ttsSecs.toFixed(1)+' s = '+totalSecs.toFixed(1)+' s':'');
     statusEl.textContent='🔊 Voz JS lista…';
   }catch(e){
     busy=false;
