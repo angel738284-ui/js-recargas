@@ -380,7 +380,6 @@ let dataArray=null;
 let raf=0;
 let recorder=null;
 let chunks=[];
-let preRoll=[];
 let autoMode=false;
 let speechActive=false;
 let busy=false;
@@ -424,8 +423,18 @@ function bestMime(){
 
 function beginPhrase(){
   if(!autoMode||busy||speechActive||!stream)return;
-  chunks=preRoll.slice();
-  preRoll=[];
+  chunks=[];
+  const mime=bestMime();
+  try{
+    recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+  }catch{
+    recorder=new MediaRecorder(stream);
+  }
+  recorder.ondataavailable=e=>{
+    if(e.data&&e.data.size)chunks.push(e.data);
+  };
+  recorder.onstop=sendRecordedPhrase;
+  recorder.start(120);
   speechActive=true;
   silenceSince=0;
   phraseStarted=Date.now();
@@ -436,17 +445,19 @@ function finishPhrase(){
   if(!speechActive)return;
   speechActive=false;
   silenceSince=0;
-  const phraseChunks=chunks.slice();
-  chunks=[];
-  setTimeout(()=>sendRecordedPhrase(phraseChunks),80);
+  try{
+    if(recorder&&recorder.state!=='inactive')recorder.stop();
+  }catch{}
 }
 
-async function sendRecordedPhrase(parts){
-  if(!autoMode||!parts||!parts.length){
+async function sendRecordedPhrase(){
+  if(!autoMode||!chunks.length){
+    chunks=[];
     return;
   }
-  const type=(parts[0]&&parts[0].type)||'audio/webm';
-  const blob=new Blob(parts,{type});
+  const type=(chunks[0]&&chunks[0].type)||'audio/webm';
+  const blob=new Blob(chunks,{type});
+  chunks=[];
   if(blob.size<900){
     statusEl.textContent='🎙️ Escuchando…';
     return;
@@ -471,7 +482,6 @@ async function sendRecordedPhrase(parts){
         busy=false;
         statusEl.textContent='🎙️ Escuchando…';
         heardEl.textContent='No lo detecté claramente en español. Repetí la frase.';
-        preRoll=[];
         return;
       }
       throw new Error(j.error||'asr_failed');
@@ -493,7 +503,7 @@ function vadLoop(){
 
   if(now<calibratingUntil && !speechActive){
     noiseFloor=noiseFloor*0.9+rms*0.1;
-    threshold=Math.max(0.018,noiseFloor*2.7);
+    threshold=Math.max(0.012,noiseFloor*2.0);
   }
 
   if(!busy){
@@ -542,30 +552,12 @@ async function startAuto(){
   source.connect(analyser);
   dataArray=new Uint8Array(analyser.fftSize);
 
-  preRoll=[];
   chunks=[];
-  const mime=bestMime();
-  try{
-    recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
-  }catch{
-    recorder=new MediaRecorder(stream);
-  }
-  recorder.ondataavailable=e=>{
-    if(!e.data||!e.data.size||busy)return;
-    if(speechActive){
-      chunks.push(e.data);
-    }else{
-      preRoll.push(e.data);
-      while(preRoll.length>4)preRoll.shift();
-    }
-  };
-  recorder.start(120);
-
   autoMode=true;
   busy=false;
   speechActive=false;
-  noiseFloor=0.008;
-  threshold=0.026;
+  noiseFloor=0.006;
+  threshold=0.016;
   calibratingUntil=Date.now()+700;
   statusEl.textContent='🎙️ Calibrando ruido… hablá en un segundo';
   vadLoop();
@@ -576,13 +568,10 @@ function stopAuto(){
   busy=false;
   if(raf)cancelAnimationFrame(raf);
   raf=0;
+  if(speechActive)finishPhrase();
   speechActive=false;
-  try{
-    if(recorder&&recorder.state!=='inactive')recorder.stop();
-  }catch{}
   recorder=null;
   chunks=[];
-  preRoll=[];
   if(stream){
     for(const t of stream.getTracks())t.stop();
   }
