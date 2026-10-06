@@ -104,6 +104,17 @@ async function transcribeVoice(buffer, contentType) {
 }
 
 function detectProsody(text, u) {
+  if (!u.searchParams.has('avg')) {
+    return {
+      label: 'normal',
+      tags: [],
+      levelRatio: 0,
+      peakRatio: 0,
+      variation: 0,
+      wordsPerSecond: 0
+    };
+  }
+
   const num = (name, fallback) => {
     const v = Number(u.searchParams.get(name));
     return Number.isFinite(v) ? v : fallback;
@@ -410,7 +421,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 #start{background:#fff;color:#111}
 #stop{background:#333;color:#fff}
 #status{margin-top:14px;font-weight:700}
-#heard{margin-top:12px;line-height:1.4;min-height:48px;white-space:pre-line}
+#heard{margin-top:12px;line-height:1.4;min-height:48px}
 .small{opacity:.75;font-size:13px;margin-top:10px}
 </style>
 </head>
@@ -448,11 +459,6 @@ let phraseStarted=0;
 let threshold=0.026;
 let noiseFloor=0.008;
 let calibratingUntil=0;
-let phraseRmsSum=0;
-let phraseRmsSqSum=0;
-let phraseRmsCount=0;
-let phrasePeak=0;
-let pendingProsody=null;
 
 async function unlockAudio(){
   try{
@@ -503,28 +509,11 @@ function beginPhrase(){
   speechActive=true;
   silenceSince=0;
   phraseStarted=Date.now();
-  phraseRmsSum=0;
-  phraseRmsSqSum=0;
-  phraseRmsCount=0;
-  phrasePeak=0;
-  pendingProsody=null;
   statusEl.textContent='🎙️ Escuchando tu frase…';
 }
 
 function finishPhrase(){
   if(!speechActive)return;
-  const durationMs=Math.max(1,Date.now()-phraseStarted);
-  const avg=phraseRmsCount ? phraseRmsSum/phraseRmsCount : 0;
-  const meanSq=phraseRmsCount ? phraseRmsSqSum/phraseRmsCount : 0;
-  const variance=Math.max(0,meanSq-avg*avg);
-  const variation=avg>0 ? Math.sqrt(variance)/avg : 0;
-  pendingProsody={
-    avg,
-    peak:phrasePeak,
-    variation,
-    noise:Math.max(noiseFloor,0.001),
-    duration:durationMs/1000
-  };
   speechActive=false;
   silenceSince=0;
   try{
@@ -549,18 +538,8 @@ async function sendRecordedPhrase(){
   statusEl.textContent='📝 Fish transcribiendo…';
   heardEl.textContent='';
 
-  const p=pendingProsody||{avg:0,peak:0,variation:0,noise:0.001,duration:1};
-  pendingProsody=null;
-  const qs=new URLSearchParams({
-    avg:String(p.avg||0),
-    peak:String(p.peak||0),
-    variation:String(p.variation||0),
-    noise:String(p.noise||0.001),
-    duration:String(p.duration||1)
-  });
-
   try{
-    const r=await fetch('/api/asr-say?'+qs.toString(),{
+    const r=await fetch('/api/asr-say',{
       method:'POST',
       headers:{
         'content-type':blob.type||'audio/webm',
@@ -578,7 +557,7 @@ async function sendRecordedPhrase(){
       }
       throw new Error(j.error||'asr_failed');
     }
-    heardEl.textContent='Entendí: “'+j.text+'”\nEstilo: '+(j.style_label||'normal');
+    heardEl.textContent='Entendí: “'+j.text+'”';
     statusEl.textContent='🔊 Esperando voz JS…';
   }catch(e){
     busy=false;
@@ -604,11 +583,6 @@ function vadLoop(){
         beginPhrase();
       }
     }else{
-      phraseRmsSum+=rms;
-      phraseRmsSqSum+=rms*rms;
-      phraseRmsCount++;
-      if(rms>phrasePeak)phrasePeak=rms;
-
       if(rms>threshold*0.82){
         silenceSince=0;
       }else{
@@ -632,7 +606,7 @@ async function startAuto(){
       audio:{
         echoCancellation:true,
         noiseSuppression:true,
-        autoGainControl:false
+        autoGainControl:true
       }
     });
   }catch(e){
