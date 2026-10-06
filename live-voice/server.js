@@ -320,6 +320,37 @@ function sanitizeMiniJsSpeech(text) {
   return s || 'Naa, bro.';
 }
 
+function safeNameForSpeech(displayName, username = '') {
+  const clean = (value) => String(value || '')
+    .replace(/^@/, '')
+    .replace(/[_\.]+/g, ' ')
+    .replace(/[^a-záéíóúüñ0-9 '\-]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  let name = clean(displayName);
+  if (!name) name = clean(username);
+
+  if (!name || name.length < 2 || name.length > 26) return '';
+  if (name.split(/\s+/).length > 3) return '';
+  if (/^\d+$/.test(name)) return '';
+  if ((name.match(/\d/g) || []).length > 4) return '';
+
+  const unsafe = /(pene|pija|verga|poronga|culo|concha|puto|puta|gay|gey|negro|negra|nazi|hitler|sexo|porn|porno|xxx)/i;
+  if (unsafe.test(name)) return '';
+
+  const letters = (name.match(/[a-záéíóúüñ]/gi) || []).length;
+  if (letters < 2) return '';
+
+  return name.slice(0, 26);
+}
+
+function miniJsSpokenText(reply, displayName = '', username = '') {
+  const answer = sanitizeMiniJsSpeech(reply);
+  const name = safeNameForSpeech(displayName, username);
+  return name ? (name + ', ' + answer).slice(0, 175) : answer;
+}
+
 function parseMiniJsJson(text) {
   let raw = String(text || '').trim();
   raw = raw.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '');
@@ -562,10 +593,10 @@ function tikTokReplyCooldownMs() {
   return 12000;
 }
 
-async function processTikTokComment(comment, username) {
+async function processTikTokComment(comment, username, displayName = '') {
   tiktokState.received += 1;
-  tiktokState.lastComment = { username, comment, at: Date.now() };
-  broadcast({ type: 'tiktok_comment', username, comment, at: Date.now() });
+  tiktokState.lastComment = { username, displayName, comment, at: Date.now() };
+  broadcast({ type: 'tiktok_comment', username, displayName, comment, at: Date.now() });
 
   if (!tiktokState.autoReply) return;
 
@@ -582,7 +613,7 @@ async function processTikTokComment(comment, username) {
     const thought = await miniJsThink(comment, username);
     if (!thought.should_reply || !thought.reply) return;
 
-    const speechText = sanitizeMiniJsSpeech(thought.reply);
+    const speechText = miniJsSpokenText(thought.reply, displayName, username);
     const audioUrl = await makeVoice(speechText);
     const at = Date.now();
 
@@ -661,8 +692,9 @@ async function connectTikTokLive(username) {
   connection.on('chat', data => {
     const comment = String(data?.comment || '').trim();
     const user = String(data?.user?.uniqueId || data?.uniqueId || '').trim();
+    const displayName = String(data?.user?.nickname || data?.nickname || '').trim();
     if (!comment) return;
-    processTikTokComment(comment, user).catch(e => {
+    processTikTokComment(comment, user, displayName).catch(e => {
       tiktokState.error = String(e?.message || e).slice(0, 300);
     });
   });
@@ -1603,7 +1635,7 @@ const server = http.createServer(async (req, res) => {
       let audioUrl = null;
 
       if (thought.should_reply && thought.reply && body.speak !== false) {
-        const speechText = sanitizeMiniJsSpeech(thought.reply);
+        const speechText = miniJsSpokenText(thought.reply, username, username);
         audioUrl = await makeVoice(speechText);
         broadcast({
           type: 'audio',
