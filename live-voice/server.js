@@ -11,6 +11,8 @@ const FISH_API_KEY = String(process.env.FISH_API_KEY || '');
 const FISH_REFERENCE_ID = String(process.env.FISH_REFERENCE_ID || 'f79707580f1f4574bb3668d16936b897');
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '');
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.8-flash');
+const KIE_API_KEY = String(process.env.KIE_API_KEY || '');
+const KIE_MODEL = String(process.env.KIE_MODEL || 'gpt-6-1-sol');
 const clients = new Set();
 const generatedAudio = new Map();
 let lastTestAt = 0;
@@ -289,7 +291,9 @@ function parseMiniJsJson(text) {
 }
 
 async function miniJsThink(comment, username = '') {
-  if (!GEMINI_API_KEY) throw new Error('gemini_api_key_missing');
+  if (!KIE_API_KEY && !GEMINI_API_KEY) {
+    throw new Error('mini_js_brain_key_missing');
+  }
 
   const safeComment = String(comment || '').trim().slice(0, 500);
   const safeUser = String(username || '').trim().replace(/^@/, '').slice(0, 80);
@@ -299,7 +303,62 @@ async function miniJsThink(comment, username = '') {
     (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
     'Comentario: ' + safeComment;
 
-  const requestModel = async (model) => {
+  const isTransient = (e) =>
+    [429, 500, 502, 503, 504].includes(Number(e?.status));
+
+  const requestKie = async () => {
+    const r = await fetch('https://api.kie.ai/codex/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + KIE_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: KIE_MODEL,
+        stream: false,
+        input: [{
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: MINI_JS_SYSTEM + '\n\nENTRADA DEL LIVE:\n' + userText
+          }]
+        }],
+        reasoning: { effort: 'low' }
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    const raw = await r.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch {
+      const err = new Error('kie_bad_json');
+      err.status = r.status;
+      throw err;
+    }
+
+    if (!r.ok) {
+      const err = new Error(
+        'kie_http_' + r.status + ': ' +
+        String(data?.error?.message || data?.message || raw).slice(0, 300)
+      );
+      err.status = r.status;
+      throw err;
+    }
+
+    const output = (data?.output || [])
+      .filter(item => item?.type === 'message')
+      .flatMap(item => item?.content || [])
+      .filter(part => part?.type === 'output_text')
+      .map(part => part?.text || '')
+      .join('')
+      .trim();
+
+    if (!output) throw new Error('kie_empty_response');
+    return { ...parseMiniJsJson(output), model: KIE_MODEL, provider: 'kie' };
+  };
+
+  const requestGemini = async (model) => {
     const r = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' +
         encodeURIComponent(model) + ':generateContent',
@@ -331,7 +390,11 @@ async function miniJsThink(comment, username = '') {
     const raw = await r.text();
     let data;
     try { data = JSON.parse(raw); }
-    catch { throw new Error('gemini_bad_json'); }
+    catch {
+      const err = new Error('gemini_bad_json');
+      err.status = r.status;
+      throw err;
+    }
 
     if (!r.ok) {
       const err = new Error(
@@ -348,37 +411,47 @@ async function miniJsThink(comment, username = '') {
       .trim();
 
     if (!output) throw new Error('gemini_empty_response');
-    return { ...parseMiniJsJson(output), model };
+    return { ...parseMiniJsJson(output), model, provider: 'gemini' };
   };
-
-  const isTransient = (e) =>
-    [429, 500, 502, 503, 504].includes(Number(e?.status));
 
   let lastError = null;
 
-  // 3.8 is always primary. Retry once for temporary overloads.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await requestModel(GEMINI_MODEL);
-    } catch (e) {
-      lastError = e;
-      if (!isTransient(e)) throw e;
-      if (attempt === 0) {
-        await new Promise(resolve => setTimeout(resolve, 650));
+  // Primary brain: Kie GPT 6.1 Sol.
+  if (KIE_API_KEY) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await requestKie();
+      } catch (e) {
+        lastError = e;
+        if (!isTransient(e) || attempt === 1) break;
+        await new Promise(resolve => setTimeout(resolve, 450));
       }
     }
   }
 
-  // Live reliability fallback: only used when the primary is overloaded.
-  if (GEMINI_MODEL !== 'gemini-3.6-flash') {
-    try {
-      return await requestModel('gemini-3.6-flash');
-    } catch (e) {
-      lastError = e;
+  // Fallback 1: Gemini 3.8 Flash.
+  if (GEMINI_API_KEY) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await requestGemini(GEMINI_MODEL);
+      } catch (e) {
+        lastError = e;
+        if (!isTransient(e) || attempt === 1) break;
+        await new Promise(resolve => setTimeout(resolve, 600));
+      }
+    }
+
+    // Fallback 2: Gemini 3.6 Flash for live reliability.
+    if (GEMINI_MODEL !== 'gemini-3.6-flash') {
+      try {
+        return await requestGemini('gemini-3.6-flash');
+      } catch (e) {
+        lastError = e;
+      }
     }
   }
 
-  throw lastError || new Error('gemini_unavailable');
+  throw lastError || new Error('mini_js_brain_unavailable');
 }
 
 async function makeVoice(text) {
@@ -914,7 +987,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-w
 <body>
 <div class="card">
   <h2>🤖 Mini JS · Cerebro</h2>
-  <p>Probá comentarios de TikTok. Gemini 3.8 Flash decide si responder y genera la respuesta con personalidad JS.</p>
+  <p>Probá comentarios de TikTok. GPT 6.1 Sol de Kie es el cerebro principal; Gemini queda como respaldo.</p>
   <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
   <textarea id="comment" placeholder="Comentario, ej: JS sos re manco 😂"></textarea>
   <button id="send">Probar comentario</button>
@@ -1005,6 +1078,8 @@ const server = http.createServer(async (req, res) => {
       voice_mcp: true,
       fish_direct: Boolean(FISH_API_KEY),
       fish_reference_id: FISH_REFERENCE_ID,
+      kie_brain: Boolean(KIE_API_KEY),
+      kie_model: KIE_MODEL,
       gemini_brain: Boolean(GEMINI_API_KEY),
       gemini_model: GEMINI_MODEL
     });
