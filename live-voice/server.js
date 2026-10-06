@@ -5,6 +5,7 @@ const PORT = process.env.PORT || 10000;
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
 const clients = new Set();
+let lastTestAt = 0;
 
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -83,7 +84,7 @@ const prismPage = `<!doctype html>
 html,body{margin:0;background:transparent;overflow:hidden;font-family:system-ui}
 #panel{position:fixed;left:10px;bottom:10px;background:rgba(0,0,0,.68);color:#fff;
 border-radius:12px;padding:8px 10px;font-size:13px}
-#unlock{border:0;border-radius:9px;padding:7px 10px;font-weight:700}
+#unlock,#test{border:0;border-radius:9px;padding:7px 10px;font-weight:700;margin-left:4px}
 </style>
 </head>
 <body>
@@ -91,11 +92,13 @@ border-radius:12px;padding:8px 10px;font-size:13px}
 <div id="panel">
   <span id="status">Conectando voz IA…</span>
   <button id="unlock">Activar audio</button>
+  <button id="test">Probar voz</button>
 </div>
 <script>
 const audio=document.getElementById('audio');
 const statusEl=document.getElementById('status');
 const unlockBtn=document.getElementById('unlock');
+const testBtn=document.getElementById('test');
 let unlocked=false;
 
 async function unlockAudio(){
@@ -113,6 +116,18 @@ async function unlockAudio(){
   }
 }
 unlockBtn.onclick=unlockAudio;
+testBtn.onclick=async()=>{
+  await unlockAudio();
+  statusEl.textContent='Generando prueba…';
+  try{
+    const r=await fetch('/api/test',{method:'POST'});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||'test_failed');
+    statusEl.textContent='Audio enviado…';
+  }catch(e){
+    statusEl.textContent='Error en prueba';
+  }
+};
 document.body.addEventListener('pointerdown',()=>{if(!unlocked)unlockAudio()},{once:true});
 
 const events=new EventSource('/events');
@@ -185,6 +200,22 @@ const server = http.createServer(async (req, res) => {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/test') {
+    try {
+      const now = Date.now();
+      if (now - lastTestAt < 10000) {
+        return json(res, 429, { ok: false, error: 'Esperá unos segundos antes de otra prueba.' });
+      }
+      lastTestAt = now;
+      const text = 'Prueba de voz en directo.';
+      const audioUrl = await makeVoice(text);
+      broadcast({ type: 'audio', url: audioUrl, text, at: now, test: true });
+      return json(res, 200, { ok: true, audio_url: audioUrl, connected_players: clients.size });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
   }
 
   if (req.method === 'POST' && u.pathname === '/api/say') {
