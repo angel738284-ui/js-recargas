@@ -1152,7 +1152,9 @@ async function sendRecordedPhrase(){
     const asrSecs=Number(j.asr_ms||0)/1000;
     const ttsSecs=Number(j.tts_ms||0)/1000;
     const totalSecs=Number(j.total_ms||0)/1000;
-    heardEl.textContent='Entendí: “'+j.text+'”'+(totalSecs?' · ASR '+asrSecs.toFixed(1)+' s + voz '+ttsSecs.toFixed(1)+' s = '+totalSecs.toFixed(1)+' s':'');
+    heardEl.textContent='Entendí: “'+j.text+'”'+
+      (j.style_label?' · Expresión: '+j.style_label:'')+
+      (totalSecs?' · ASR '+asrSecs.toFixed(1)+' s + voz '+ttsSecs.toFixed(1)+' s = '+totalSecs.toFixed(1)+' s':'');
     statusEl.textContent='🔊 Voz JS lista…';
   }catch(e){
     busy=false;
@@ -1690,7 +1692,9 @@ const server = http.createServer(async (req, res) => {
 
       const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
 
-      // Fast path for LIVE: no GPT and no acoustic/prosody analysis.
+      // Fast LIVE path: ASR and expression analysis run in parallel.
+      // Expression is allowed to add at most ~250 ms after ASR finishes.
+      const prosodyPromise = analyzeAudioProsody(audio).catch(() => null);
       const tx = await transcribeVoice(audio, contentType);
       const asrMs = Date.now() - startedAt;
       const text = tx.text;
@@ -1705,8 +1709,15 @@ const server = http.createServer(async (req, res) => {
       }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
+      const acousticMetrics = await Promise.race([
+        prosodyPromise,
+        new Promise(resolve => setTimeout(() => resolve(null), 250))
+      ]);
+      const prosody = detectProsody(text, acousticMetrics);
+      const styledText = (prosody.tags.length ? prosody.tags.join(' ') + ' ' : '') + text;
+
       const ttsStartedAt = Date.now();
-      const audioUrl = await makeVoice(text);
+      const audioUrl = await makeVoice(styledText);
       const ttsMs = Date.now() - ttsStartedAt;
       const totalMs = Date.now() - startedAt;
 
@@ -1714,7 +1725,7 @@ const server = http.createServer(async (req, res) => {
         type: 'audio',
         url: audioUrl,
         text,
-        style: 'fast',
+        style: prosody.label,
         at: Date.now(),
         asr: 'fish',
         asr_ms: asrMs,
@@ -1725,7 +1736,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         text,
-        style_label: 'fast',
+        style_label: prosody.label,
         language_code: tx.language_code || 'es',
         audio_url: audioUrl,
         asr_ms: asrMs,
