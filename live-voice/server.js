@@ -1,5 +1,7 @@
 const http = require('http');
 const { URL } = require('url');
+const { spawn } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
 
 const PORT = process.env.PORT || 10000;
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
@@ -103,47 +105,107 @@ async function transcribeVoice(buffer, contentType) {
   };
 }
 
-function detectProsody(text, u) {
-  if (!u.searchParams.has('avg')) {
+async function analyzeAudioProsody(buffer) {
+  return await new Promise((resolve, reject) => {
+    const ff = spawn(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-ac', '1',
+      '-ar', '16000',
+      '-f', 's16le',
+      'pipe:1'
+    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    const out = [];
+    let total = 0;
+    let err = '';
+
+    ff.stdout.on('data', chunk => {
+      total += chunk.length;
+      if (total <= 2 * 1024 * 1024) out.push(chunk);
+    });
+    ff.stderr.on('data', chunk => { err += chunk.toString(); });
+    ff.on('error', reject);
+    ff.on('close', code => {
+      if (code !== 0 || !out.length) {
+        return reject(new Error('audio_analysis_failed:' + err.slice(0,160)));
+      }
+
+      const pcm = Buffer.concat(out);
+      const samples = Math.floor(pcm.length / 2);
+      if (samples < 1600) return reject(new Error('audio_analysis_too_short'));
+
+      const frameSamples = 320; // 20 ms at 16 kHz
+      const frameRms = [];
+      let globalPeak = 0;
+
+      for (let start = 0; start + frameSamples <= samples; start += frameSamples) {
+        let sumSq = 0;
+        let peak = 0;
+        for (let i = 0; i < frameSamples; i++) {
+          const s = pcm.readInt16LE((start + i) * 2) / 32768;
+          const a = Math.abs(s);
+          if (a > peak) peak = a;
+          if (a > globalPeak) globalPeak = a;
+          sumSq += s * s;
+        }
+        frameRms.push(Math.sqrt(sumSq / frameSamples));
+      }
+
+      const sorted = frameRms.slice().sort((a,b)=>a-b);
+      const noise = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.20))] || 0.001;
+      const activeThreshold = Math.max(0.010, noise * 2.3);
+      const active = frameRms.filter(v => v >= activeThreshold);
+      const activeMean = active.length ? active.reduce((a,b)=>a+b,0) / active.length : 0;
+      const variance = active.length
+        ? active.reduce((a,v)=>a + Math.pow(v-activeMean,2),0) / active.length
+        : 0;
+      const variation = activeMean > 0 ? Math.sqrt(variance) / activeMean : 0;
+
+      resolve({
+        duration: samples / 16000,
+        activeDuration: Math.max(0.02, active.length * 0.02),
+        rms: activeMean,
+        dbfs: 20 * Math.log10(Math.max(activeMean, 0.000001)),
+        peak: globalPeak,
+        peakDbfs: 20 * Math.log10(Math.max(globalPeak, 0.000001)),
+        variation
+      });
+    });
+
+    ff.stdin.end(buffer);
+  });
+}
+
+function detectProsody(text, metrics) {
+  if (!metrics) {
     return {
       label: 'normal',
       tags: [],
-      levelRatio: 0,
-      peakRatio: 0,
+      dbfs: null,
+      peakDbfs: null,
       variation: 0,
       wordsPerSecond: 0
     };
   }
 
-  const num = (name, fallback) => {
-    const v = Number(u.searchParams.get(name));
-    return Number.isFinite(v) ? v : fallback;
-  };
-
-  const avg = Math.max(0, num('avg', 0));
-  const peak = Math.max(0, num('peak', 0));
-  const variation = Math.max(0, num('variation', 0));
-  const noise = Math.max(0.001, num('noise', 0.006));
-  const duration = Math.min(20, Math.max(0.35, num('duration', 1)));
-
-  const levelRatio = Math.min(20, avg / noise);
-  const peakRatio = Math.min(40, peak / noise);
   const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
-  const speakingSeconds = Math.max(0.45, duration - 0.72);
-  const wordsPerSecond = words / speakingSeconds;
-
-  const fast = wordsPerSecond >= 3.0;
-  const slow = wordsPerSecond <= 1.65;
-  const soft = levelRatio < 2.7 && peakRatio < 5.5;
-  const loud = levelRatio >= 5.5 || peakRatio >= 10;
-  const expressive = variation >= 0.55;
+  const wordsPerSecond = words / Math.max(0.45, metrics.activeDuration || metrics.duration || 1);
+  const fast = wordsPerSecond >= 2.9;
+  const slow = wordsPerSecond <= 1.55;
+  const soft = metrics.dbfs <= -28;
+  const loud = metrics.dbfs >= -18 || metrics.peakDbfs >= -4.5;
+  const expressive = metrics.variation >= 0.48;
 
   let label = 'normal';
   let tags = [];
 
-  if ((fast && loud) || (fast && expressive && levelRatio >= 3.2)) {
+  if ((fast && loud) || (fast && expressive)) {
     label = 'emocionado · rápido';
     tags = ['[excited]', '[speaking quickly]'];
+  } else if (loud && expressive) {
+    label = 'emocionado · enérgico';
+    tags = ['[excited]', '[emphasis]'];
   } else if (loud) {
     label = 'fuerte · enérgico';
     tags = ['[loud voice]', '[emphasis]'];
@@ -167,9 +229,9 @@ function detectProsody(text, u) {
   return {
     label,
     tags,
-    levelRatio: Number(levelRatio.toFixed(2)),
-    peakRatio: Number(peakRatio.toFixed(2)),
-    variation: Number(variation.toFixed(2)),
+    dbfs: Number(metrics.dbfs.toFixed(1)),
+    peakDbfs: Number(metrics.peakDbfs.toFixed(1)),
+    variation: Number(metrics.variation.toFixed(2)),
     wordsPerSecond: Number(wordsPerSecond.toFixed(2))
   };
 }
@@ -770,7 +832,10 @@ const server = http.createServer(async (req, res) => {
       if (audio.length < 800) return json(res, 400, { ok: false, error: 'audio_too_short' });
 
       const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
-      const tx = await transcribeVoice(audio, contentType);
+      const [tx, acousticMetrics] = await Promise.all([
+        transcribeVoice(audio, contentType),
+        analyzeAudioProsody(audio).catch(() => null)
+      ]);
       const text = tx.text;
 
       if (!text) return json(res, 422, { ok: false, error: 'no_speech_detected' });
@@ -783,7 +848,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
-      const prosody = detectProsody(text, u);
+      const prosody = detectProsody(text, acousticMetrics);
       const styledText = (prosody.tags.length ? prosody.tags.join(' ') + ' ' : '') + text;
       const audioUrl = await makeVoice(styledText);
       broadcast({
@@ -800,8 +865,8 @@ const server = http.createServer(async (req, res) => {
         text,
         style_label: prosody.label,
         style_metrics: {
-          level_ratio: prosody.levelRatio,
-          peak_ratio: prosody.peakRatio,
+          dbfs: prosody.dbfs,
+          peak_dbfs: prosody.peakDbfs,
           variation: prosody.variation,
           words_per_second: prosody.wordsPerSecond
         },
