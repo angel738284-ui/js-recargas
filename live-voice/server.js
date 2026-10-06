@@ -139,6 +139,92 @@ async function transcribeVoice(buffer, contentType) {
   };
 }
 
+function spanishLiveGate(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return { ok: false, reason: 'empty' };
+
+  // Reject clearly non-Latin scripts.
+  if (/[\u0400-\u04ff\u0370-\u03ff\u0600-\u06ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(raw)) {
+    return { ok: false, reason: 'non_latin_script' };
+  }
+
+  const lower = raw.toLowerCase()
+    .replace(/[^a-záéíóúüñ0-9¿¡' ]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = lower.split(' ').filter(Boolean);
+  if (!words.length) return { ok: false, reason: 'no_words' };
+
+  // Common false/hallucinated foreign phrases.
+  if (/\b(thank you|thanks for watching|subscribe|like and subscribe|good morning|good night|how are you|what are you doing)\b/i.test(lower)) {
+    return { ok: false, reason: 'english_phrase' };
+  }
+  if (/\b(obrigad[oa]|bom dia|boa noite|tudo bem|como vai|se inscreva)\b/i.test(lower)) {
+    return { ok: false, reason: 'portuguese_phrase' };
+  }
+
+  const spanish = new Set([
+    'el','la','los','las','un','una','unos','unas','de','del','al','y','o','pero','porque','por','para','con','sin',
+    'que','qué','como','cómo','cuando','cuándo','donde','dónde','quien','quién','cuanto','cuánto',
+    'yo','vos','tu','tú','me','te','se','lo','le','nos','mi','mis','su','sus',
+    'no','si','sí','soy','sos','es','estoy','estás','esta','está','ese','esa','eso','esto',
+    'acá','ahi','ahí','mira','mirá','dale','vamos','vamos','tengo','tenés','quiero','puedo','puede','hacé','hace','hacer',
+    'amigo','amiga','che','naa','re','manco','malísimo','bueno','bien','mal','ahora','después','antes','otra','otro',
+    'jugar','juego','jugá','jugando','diamantes','pase','booyah','rango','partida','tiro','cabeza'
+  ]);
+
+  const englishStrong = new Set([
+    'the','and','you','your','yours','is','are','am','what','why','where','when','who','this','that','these','those',
+    'with','from','have','has','had','do','does','did','can','could','would','should','please','thanks','thank','hello',
+    'good','morning','night','yes','yeah','okay','want','need','look','listen','subscribe','watching'
+  ]);
+
+  const portugueseStrong = new Set([
+    'você','voce','não','nao','obrigado','obrigada','meu','minha','seu','sua','isso','aqui','agora','também','tambem',
+    'estou','estamos','vocês','voces','tudo','bom','boa','vai','fica','ficou','muito','mesmo','olha','cara'
+  ]);
+
+  const otherForeignStrong = new Set([
+    'bonjour','merci','vous','nous','pourquoi','maintenant','salut',
+    'ciao','grazie','buongiorno','buonasera','perché','perche','adesso',
+    'hallo','danke','guten','morgen','warum','bitte','nicht','jetzt'
+  ]);
+
+  let es = 0;
+  let foreign = 0;
+
+  for (const w of words) {
+    if (spanish.has(w)) es += 1;
+    if (englishStrong.has(w)) foreign += 1.5;
+    if (portugueseStrong.has(w)) foreign += 1.5;
+    if (otherForeignStrong.has(w)) foreign += 1.5;
+  }
+
+  if (/[áéíóúüñ¿¡]/i.test(raw)) es += 1;
+  if (/\b(vos|sos|tenés|mirá|dale|che|naa)\b/i.test(lower)) es += 2;
+
+  // Very short phrases are allowed unless they are clearly foreign.
+  if (words.length <= 2) {
+    return { ok: foreign < 2 || es >= foreign, reason: foreign >= 2 && es < foreign ? 'short_foreign' : 'short_ok' };
+  }
+
+  if (foreign >= 2.5 && foreign > es + 0.5) {
+    return { ok: false, reason: 'foreign_score' };
+  }
+
+  // For live safety, a foreign-looking phrase with no Spanish evidence is rejected.
+  if (words.length >= 2 && es === 0 && foreign >= 1.5) {
+    return { ok: false, reason: 'foreign_without_spanish' };
+  }
+
+  // Long sentences must contain at least one clear Spanish signal.
+  if (words.length >= 4 && es === 0) {
+    return { ok: false, reason: 'no_spanish_evidence' };
+  }
+
+  return { ok: true, reason: 'spanish_or_neutral' };
+}
+
 async function analyzeAudioProsody(buffer) {
   return await new Promise((resolve, reject) => {
     const ff = spawn(ffmpegPath, [
@@ -1716,9 +1802,21 @@ const server = http.createServer(async (req, res) => {
         return json(res, 422, {
           ok: false,
           error: 'non_spanish_detected',
-          language_code: tx.language_code
+          language_code: tx.language_code,
+          reason: 'fish_language_code'
         });
       }
+
+      const languageGate = spanishLiveGate(text);
+      if (!languageGate.ok) {
+        return json(res, 422, {
+          ok: false,
+          error: 'non_spanish_detected',
+          language_code: tx.language_code || '',
+          reason: languageGate.reason
+        });
+      }
+
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
       const ttsStartedAt = Date.now();
