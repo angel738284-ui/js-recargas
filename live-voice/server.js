@@ -34,6 +34,17 @@ async function readJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
+async function readBuffer(req, maxBytes = 8 * 1024 * 1024) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBytes) throw new Error('audio_too_large');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 function isAuthorized(req) {
   return Boolean(LIVE_TOKEN) &&
     String(req.headers.authorization || '') === 'Bearer ' + LIVE_TOKEN;
@@ -51,6 +62,41 @@ function broadcast(message) {
     try { res.write(frame); }
     catch { clients.delete(res); }
   }
+}
+
+async function transcribeVoice(buffer, contentType) {
+  if (!FISH_API_KEY) throw new Error('fish_api_key_missing');
+
+  const form = new FormData();
+  form.append(
+    'audio',
+    new Blob([buffer], { type: contentType || 'audio/webm' }),
+    'speech.webm'
+  );
+  form.append('language', 'es');
+  form.append('ignore_timestamps', 'true');
+  form.append('tag_audio_events', 'false');
+
+  const r = await fetch('https://api.fish.audio/v1/asr', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + FISH_API_KEY,
+      'model': 'transcribe-1-pro'
+    },
+    body: form,
+    signal: AbortSignal.timeout(60000)
+  });
+
+  const raw = await r.text();
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { throw new Error('asr_bad_json'); }
+
+  if (!r.ok) {
+    throw new Error('asr_http_' + r.status + ': ' + String(data?.message || raw).slice(0,300));
+  }
+
+  return String(data?.text || '').trim();
 }
 
 async function makeVoice(text) {
@@ -307,86 +353,37 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 <body>
 <div class="card">
   <h2>JS Live Voice · AUTO</h2>
-  <div>Una pulsación y queda escuchando. Cuando terminás una frase, la manda sola a Fish.</div>
+  <div>Fish escucha tu audio directamente. Al terminar una frase, la transcribe y la reproduce con la voz de JS.</div>
   <button id="start">🟢 Iniciar micrófono AUTO</button>
   <button id="stop">🔴 Detener</button>
   <div id="status">Detenido</div>
   <div id="heard"></div>
-  <div class="small">Durante esta prueba el micrófono se pausa mientras habla JS para evitar eco.</div>
+  <div class="small">El micrófono se pausa mientras habla JS para evitar eco.</div>
 </div>
 <audio id="audio" playsinline></audio>
 <script>
 const KEY=${JSON.stringify(key)};
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const startBtn=document.getElementById('start');
 const stopBtn=document.getElementById('stop');
 const statusEl=document.getElementById('status');
 const heardEl=document.getElementById('heard');
 const audio=document.getElementById('audio');
 
-let rec=null;
+let stream=null;
+let ctx=null;
+let analyser=null;
+let dataArray=null;
+let raf=0;
+let recorder=null;
+let chunks=[];
 let autoMode=false;
-let listening=false;
+let speechActive=false;
 let busy=false;
-let pending='';
-let restarting=false;
-let phraseBuffer='';
-let latestInterim='';
-let silenceTimer=null;
-
-function normWords(s){
-  return String(s||'')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9áéíóúüñ ]/gi,' ')
-    .replace(/\s+/g,' ')
-    .trim();
-}
-
-function mergeTranscript(base, incoming){
-  base=String(base||'').trim();
-  incoming=String(incoming||'').trim();
-  if(!base)return incoming;
-  if(!incoming)return base;
-
-  const nb=normWords(base);
-  const ni=normWords(incoming);
-
-  if(ni===nb)return base;
-  if(ni.startsWith(nb+' '))return incoming;
-  if(nb.startsWith(ni+' '))return base;
-
-  const bw=base.split(/\s+/);
-  const iw=incoming.split(/\s+/);
-  const bn=bw.map(normWords);
-  const inn=iw.map(normWords);
-  let overlap=0;
-  const max=Math.min(bn.length,inn.length);
-  for(let k=max;k>=1;k--){
-    let same=true;
-    for(let j=0;j<k;j++){
-      if(bn[bn.length-k+j]!==inn[j]){same=false;break;}
-    }
-    if(same){overlap=k;break;}
-  }
-  return (base+' '+iw.slice(overlap).join(' ')).replace(/\s+/g,' ').trim();
-}
-
-function schedulePhraseFlush(){
-  if(silenceTimer)clearTimeout(silenceTimer);
-  silenceTimer=setTimeout(()=>{
-    silenceTimer=null;
-    if(busy||!autoMode)return;
-    const text=String(phraseBuffer||latestInterim||'').replace(/\s+/g,' ').trim();
-    phraseBuffer='';
-    latestInterim='';
-    if(text){
-      pending=text;
-      heardEl.textContent='Entendí: “'+text+'”';
-      sendPhrase(text);
-    }
-  },950);
-}
+let silenceSince=0;
+let phraseStarted=0;
+let threshold=0.026;
+let noiseFloor=0.008;
+let calibratingUntil=0;
 
 async function unlockAudio(){
   try{
@@ -398,134 +395,202 @@ async function unlockAudio(){
   }catch{}
 }
 
-function buildRecognition(){
-  rec=new SR();
-  rec.lang='es-AR';
-  rec.continuous=true;
-  rec.interimResults=true;
-  rec.maxAlternatives=1;
-
-  rec.onstart=()=>{
-    listening=true;
-    restarting=false;
-    statusEl.textContent='🎙️ Escuchando… hablá normal';
-  };
-
-  rec.onresult=(event)=>{
-    let snapshot='';
-    let interim='';
-
-    for(let i=0;i<event.results.length;i++){
-      const t=String(event.results[i][0].transcript||'').trim();
-      if(!t)continue;
-      snapshot=mergeTranscript(snapshot,t);
-      if(!event.results[i].isFinal)interim=t;
-    }
-
-    phraseBuffer=snapshot.trim();
-    latestInterim=interim.trim();
-
-    if(phraseBuffer){
-      heardEl.textContent='Escuchando: “'+phraseBuffer+'”';
-      schedulePhraseFlush();
-    }
-  };
-
-  rec.onerror=(e)=>{
-    const err=String(e.error||'error');
-    if(err==='not-allowed'||err==='service-not-allowed'){
-      autoMode=false;
-      statusEl.textContent='Permití el micrófono en Chrome';
-    }else if(err!=='aborted'&&err!=='no-speech'){
-      statusEl.textContent='Micrófono: '+err;
-    }
-  };
-
-  rec.onend=()=>{
-    listening=false;
-    if(autoMode && !busy && !restarting){
-      restarting=true;
-      setTimeout(startListening,350);
-    }
-  };
+function rmsLevel(){
+  analyser.getByteTimeDomainData(dataArray);
+  let sum=0;
+  for(let i=0;i<dataArray.length;i++){
+    const v=(dataArray[i]-128)/128;
+    sum+=v*v;
+  }
+  return Math.sqrt(sum/dataArray.length);
 }
 
-function startListening(){
-  if(!autoMode||busy||listening||!rec)return;
-  try{rec.start();}catch{}
+function bestMime(){
+  const types=[
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4'
+  ];
+  for(const t of types){
+    if(window.MediaRecorder && MediaRecorder.isTypeSupported(t))return t;
+  }
+  return '';
 }
 
-function stopListening(){
-  if(!rec||!listening)return;
-  try{rec.stop();}catch{}
-}
-
-async function sendPhrase(text){
-  if(!text||busy)return;
-  busy=true;
-  stopListening();
-  statusEl.textContent='📝 Transcripto · generando voz JS…';
+function beginPhrase(){
+  if(!autoMode||busy||speechActive||!stream)return;
+  chunks=[];
+  const mime=bestMime();
   try{
-    const r=await fetch('/api/browser-say',{
+    recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+  }catch{
+    recorder=new MediaRecorder(stream);
+  }
+  recorder.ondataavailable=e=>{
+    if(e.data&&e.data.size)chunks.push(e.data);
+  };
+  recorder.onstop=sendRecordedPhrase;
+  recorder.start(120);
+  speechActive=true;
+  silenceSince=0;
+  phraseStarted=Date.now();
+  statusEl.textContent='🎙️ Escuchando tu frase…';
+}
+
+function finishPhrase(){
+  if(!speechActive)return;
+  speechActive=false;
+  silenceSince=0;
+  try{
+    if(recorder&&recorder.state!=='inactive')recorder.stop();
+  }catch{}
+}
+
+async function sendRecordedPhrase(){
+  if(!autoMode||!chunks.length){
+    chunks=[];
+    return;
+  }
+  const type=(chunks[0]&&chunks[0].type)||'audio/webm';
+  const blob=new Blob(chunks,{type});
+  chunks=[];
+  if(blob.size<900){
+    statusEl.textContent='🎙️ Escuchando…';
+    return;
+  }
+
+  busy=true;
+  statusEl.textContent='📝 Fish transcribiendo…';
+  heardEl.textContent='';
+
+  try{
+    const r=await fetch('/api/asr-say',{
       method:'POST',
       headers:{
-        'content-type':'application/json',
+        'content-type':blob.type||'audio/webm',
         'authorization':'Bearer '+KEY
       },
-      body:JSON.stringify({text})
+      body:blob
     });
     const j=await r.json();
-    if(!r.ok) throw new Error(j.error||'voice_failed');
+    if(!r.ok)throw new Error(j.error||'asr_failed');
+    heardEl.textContent='Entendí: “'+j.text+'”';
     statusEl.textContent='🔊 Esperando voz JS…';
   }catch(e){
     busy=false;
-    statusEl.textContent='Error: '+String(e.message||e);
-    if(autoMode)setTimeout(startListening,500);
+    statusEl.textContent='Error de transcripción';
+    heardEl.textContent=String(e.message||e);
   }
 }
 
-if(!SR){
-  startBtn.disabled=true;
-  statusEl.textContent='Abrí esta página en Chrome: este navegador no tiene reconocimiento de voz.';
-}else{
-  buildRecognition();
+function vadLoop(){
+  if(!autoMode||!analyser)return;
+
+  const rms=rmsLevel();
+  const now=Date.now();
+
+  if(now<calibratingUntil && !speechActive){
+    noiseFloor=noiseFloor*0.9+rms*0.1;
+    threshold=Math.max(0.018,noiseFloor*2.7);
+  }
+
+  if(!busy){
+    if(!speechActive){
+      if(now>=calibratingUntil && rms>threshold){
+        beginPhrase();
+      }
+    }else{
+      if(rms>threshold*0.82){
+        silenceSince=0;
+      }else{
+        if(!silenceSince)silenceSince=now;
+        if(now-silenceSince>850)finishPhrase();
+      }
+
+      if(now-phraseStarted>14000)finishPhrase();
+    }
+  }
+
+  raf=requestAnimationFrame(vadLoop);
 }
 
-startBtn.onclick=async()=>{
+async function startAuto(){
+  if(autoMode)return;
   await unlockAudio();
-  if(!SR)return;
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:{
+        echoCancellation:true,
+        noiseSuppression:true,
+        autoGainControl:true
+      }
+    });
+  }catch(e){
+    statusEl.textContent='Permití el micrófono en Chrome';
+    return;
+  }
+
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  await ctx.resume();
+  const source=ctx.createMediaStreamSource(stream);
+  analyser=ctx.createAnalyser();
+  analyser.fftSize=1024;
+  analyser.smoothingTimeConstant=0.15;
+  source.connect(analyser);
+  dataArray=new Uint8Array(analyser.fftSize);
+
   autoMode=true;
   busy=false;
-  startListening();
-};
+  speechActive=false;
+  noiseFloor=0.008;
+  threshold=0.026;
+  calibratingUntil=Date.now()+700;
+  statusEl.textContent='🎙️ Calibrando ruido… hablá en un segundo';
+  vadLoop();
+}
 
-stopBtn.onclick=()=>{
+function stopAuto(){
   autoMode=false;
   busy=false;
-  stopListening();
+  if(raf)cancelAnimationFrame(raf);
+  raf=0;
+  if(speechActive)finishPhrase();
+  speechActive=false;
+  if(stream){
+    for(const t of stream.getTracks())t.stop();
+  }
+  stream=null;
+  if(ctx){
+    try{ctx.close();}catch{}
+  }
+  ctx=null;
+  analyser=null;
   statusEl.textContent='Detenido';
-};
+}
+
+startBtn.onclick=startAuto;
+stopBtn.onclick=stopAuto;
 
 const events=new EventSource('/events');
 events.onmessage=async(ev)=>{
   try{
     const msg=JSON.parse(ev.data);
     if(msg.type==='audio'&&msg.url){
-      stopListening();
+      if(speechActive)finishPhrase();
+      busy=true;
       audio.src=msg.url;
       audio.muted=false;
       statusEl.textContent='🔊 JS hablando…';
       await audio.play();
       audio.onended=()=>{
         busy=false;
-        pending='';
-        statusEl.textContent=autoMode?'Reanudando micrófono…':'Detenido';
-        if(autoMode)setTimeout(startListening,350);
+        statusEl.textContent=autoMode?'🎙️ Escuchando…':'Detenido';
       };
     }
   }catch{
     busy=false;
-    if(autoMode)setTimeout(startListening,500);
+    if(autoMode)statusEl.textContent='🎙️ Escuchando…';
   }
 };
 </script>
@@ -609,6 +674,33 @@ const server = http.createServer(async (req, res) => {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/asr-say') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+
+    try {
+      const audio = await readBuffer(req);
+      if (audio.length < 800) return json(res, 400, { ok: false, error: 'audio_too_short' });
+
+      const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
+      const text = await transcribeVoice(audio, contentType);
+
+      if (!text) return json(res, 422, { ok: false, error: 'no_speech_detected' });
+      if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
+
+      const audioUrl = await makeVoice(text);
+      broadcast({ type: 'audio', url: audioUrl, text, at: Date.now(), asr: 'fish' });
+
+      return json(res, 200, {
+        ok: true,
+        text,
+        audio_url: audioUrl,
+        connected_players: clients.size
+      });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
   }
 
   if (req.method === 'POST' && u.pathname === '/api/browser-say') {
