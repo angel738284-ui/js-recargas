@@ -3,6 +3,7 @@ const { URL } = require('url');
 
 const PORT = process.env.PORT || 10000;
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
+const CONTROLLER_KEY = String(process.env.CONTROLLER_KEY || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
 const FISH_API_KEY = String(process.env.FISH_API_KEY || '');
 const FISH_REFERENCE_ID = String(process.env.FISH_REFERENCE_ID || 'f79707580f1f4574bb3668d16936b897');
@@ -36,6 +37,12 @@ async function readJson(req) {
 function isAuthorized(req) {
   return Boolean(LIVE_TOKEN) &&
     String(req.headers.authorization || '') === 'Bearer ' + LIVE_TOKEN;
+}
+
+function isControllerAuthorized(req) {
+  const auth = String(req.headers.authorization || '');
+  return (Boolean(CONTROLLER_KEY) && auth === 'Bearer ' + CONTROLLER_KEY) ||
+    (Boolean(LIVE_TOKEN) && auth === 'Bearer ' + LIVE_TOKEN);
 }
 
 function broadcast(message) {
@@ -278,6 +285,193 @@ fetch('/keepalive',{cache:'no-store'}).catch(()=>{});
 </body>
 </html>`;
 
+function makeControlPage(key) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JS Live Voice · AUTO</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:system-ui;padding:18px}
+.card{max-width:560px;margin:auto;background:#1b1b1b;border-radius:18px;padding:18px}
+h2{margin:0 0 10px}
+button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-weight:800;margin-top:10px}
+#start{background:#fff;color:#111}
+#stop{background:#333;color:#fff}
+#status{margin-top:14px;font-weight:700}
+#heard{margin-top:12px;line-height:1.4;min-height:48px}
+.small{opacity:.75;font-size:13px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>JS Live Voice · AUTO</h2>
+  <div>Una pulsación y queda escuchando. Cuando terminás una frase, la manda sola a Fish.</div>
+  <button id="start">🟢 Iniciar micrófono AUTO</button>
+  <button id="stop">🔴 Detener</button>
+  <div id="status">Detenido</div>
+  <div id="heard"></div>
+  <div class="small">Durante esta prueba el micrófono se pausa mientras habla JS para evitar eco.</div>
+</div>
+<audio id="audio" playsinline></audio>
+<script>
+const KEY=${JSON.stringify(key)};
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const startBtn=document.getElementById('start');
+const stopBtn=document.getElementById('stop');
+const statusEl=document.getElementById('status');
+const heardEl=document.getElementById('heard');
+const audio=document.getElementById('audio');
+
+let rec=null;
+let autoMode=false;
+let listening=false;
+let busy=false;
+let pending='';
+let restarting=false;
+
+async function unlockAudio(){
+  try{
+    audio.muted=true;
+    audio.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+    await audio.play();
+    audio.pause();
+    audio.muted=false;
+  }catch{}
+}
+
+function buildRecognition(){
+  rec=new SR();
+  rec.lang='es-AR';
+  rec.continuous=true;
+  rec.interimResults=true;
+  rec.maxAlternatives=1;
+
+  rec.onstart=()=>{
+    listening=true;
+    restarting=false;
+    statusEl.textContent='🎙️ Escuchando… hablá normal';
+  };
+
+  rec.onresult=(event)=>{
+    let interim='';
+    let finalText='';
+    for(let i=event.resultIndex;i<event.results.length;i++){
+      const t=event.results[i][0].transcript.trim();
+      if(event.results[i].isFinal) finalText+=(finalText?' ':'')+t;
+      else interim+=(interim?' ':'')+t;
+    }
+    if(interim) heardEl.textContent='Escuchando: “'+interim+'”';
+    if(finalText && !busy){
+      pending=finalText.trim();
+      heardEl.textContent='Entendí: “'+pending+'”';
+      sendPhrase(pending);
+    }
+  };
+
+  rec.onerror=(e)=>{
+    const err=String(e.error||'error');
+    if(err==='not-allowed'||err==='service-not-allowed'){
+      autoMode=false;
+      statusEl.textContent='Permití el micrófono en Chrome';
+    }else if(err!=='aborted'&&err!=='no-speech'){
+      statusEl.textContent='Micrófono: '+err;
+    }
+  };
+
+  rec.onend=()=>{
+    listening=false;
+    if(autoMode && !busy && !restarting){
+      restarting=true;
+      setTimeout(startListening,350);
+    }
+  };
+}
+
+function startListening(){
+  if(!autoMode||busy||listening||!rec)return;
+  try{rec.start();}catch{}
+}
+
+function stopListening(){
+  if(!rec||!listening)return;
+  try{rec.stop();}catch{}
+}
+
+async function sendPhrase(text){
+  if(!text||busy)return;
+  busy=true;
+  stopListening();
+  statusEl.textContent='📝 Transcripto · generando voz JS…';
+  try{
+    const r=await fetch('/api/browser-say',{
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'authorization':'Bearer '+KEY
+      },
+      body:JSON.stringify({text})
+    });
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||'voice_failed');
+    statusEl.textContent='🔊 Esperando voz JS…';
+  }catch(e){
+    busy=false;
+    statusEl.textContent='Error: '+String(e.message||e);
+    if(autoMode)setTimeout(startListening,500);
+  }
+}
+
+if(!SR){
+  startBtn.disabled=true;
+  statusEl.textContent='Abrí esta página en Chrome: este navegador no tiene reconocimiento de voz.';
+}else{
+  buildRecognition();
+}
+
+startBtn.onclick=async()=>{
+  await unlockAudio();
+  if(!SR)return;
+  autoMode=true;
+  busy=false;
+  startListening();
+};
+
+stopBtn.onclick=()=>{
+  autoMode=false;
+  busy=false;
+  stopListening();
+  statusEl.textContent='Detenido';
+};
+
+const events=new EventSource('/events');
+events.onmessage=async(ev)=>{
+  try{
+    const msg=JSON.parse(ev.data);
+    if(msg.type==='audio'&&msg.url){
+      stopListening();
+      audio.src=msg.url;
+      audio.muted=false;
+      statusEl.textContent='🔊 JS hablando…';
+      await audio.play();
+      audio.onended=()=>{
+        busy=false;
+        pending='';
+        statusEl.textContent=autoMode?'Reanudando micrófono…':'Detenido';
+        if(autoMode)setTimeout(startListening,350);
+      };
+    }
+  }catch{
+    busy=false;
+    if(autoMode)setTimeout(startListening,500);
+  }
+};
+</script>
+</body>
+</html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
 
@@ -322,6 +516,19 @@ const server = http.createServer(async (req, res) => {
     return res.end(item.buf);
   }
 
+  if (req.method === 'GET' && u.pathname === '/control') {
+    const key = String(u.searchParams.get('key') || '');
+    if (!CONTROLLER_KEY || key !== CONTROLLER_KEY) {
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer'
+    });
+    return res.end(makeControlPage(key));
+  }
+
   if (req.method === 'GET' && u.pathname === '/prism') {
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
@@ -344,7 +551,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && u.pathname === '/api/browser-say') {
-    if (!isAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
       const now = Date.now();
       if (now - lastBrowserSayAt < 2500) {
