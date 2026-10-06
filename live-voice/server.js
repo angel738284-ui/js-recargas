@@ -96,7 +96,11 @@ async function transcribeVoice(buffer, contentType) {
     throw new Error('asr_http_' + r.status + ': ' + String(data?.message || raw).slice(0,300));
   }
 
-  return String(data?.text || '').trim();
+  return {
+    text: String(data?.text || '').trim(),
+    language_code: String(data?.language_code || '').toLowerCase(),
+    language: String(data?.language || '')
+  };
 }
 
 async function makeVoice(text) {
@@ -376,6 +380,7 @@ let dataArray=null;
 let raf=0;
 let recorder=null;
 let chunks=[];
+let preRoll=[];
 let autoMode=false;
 let speechActive=false;
 let busy=false;
@@ -419,18 +424,8 @@ function bestMime(){
 
 function beginPhrase(){
   if(!autoMode||busy||speechActive||!stream)return;
-  chunks=[];
-  const mime=bestMime();
-  try{
-    recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
-  }catch{
-    recorder=new MediaRecorder(stream);
-  }
-  recorder.ondataavailable=e=>{
-    if(e.data&&e.data.size)chunks.push(e.data);
-  };
-  recorder.onstop=sendRecordedPhrase;
-  recorder.start(120);
+  chunks=preRoll.slice();
+  preRoll=[];
   speechActive=true;
   silenceSince=0;
   phraseStarted=Date.now();
@@ -441,19 +436,17 @@ function finishPhrase(){
   if(!speechActive)return;
   speechActive=false;
   silenceSince=0;
-  try{
-    if(recorder&&recorder.state!=='inactive')recorder.stop();
-  }catch{}
+  const phraseChunks=chunks.slice();
+  chunks=[];
+  setTimeout(()=>sendRecordedPhrase(phraseChunks),80);
 }
 
-async function sendRecordedPhrase(){
-  if(!autoMode||!chunks.length){
-    chunks=[];
+async function sendRecordedPhrase(parts){
+  if(!autoMode||!parts||!parts.length){
     return;
   }
-  const type=(chunks[0]&&chunks[0].type)||'audio/webm';
-  const blob=new Blob(chunks,{type});
-  chunks=[];
+  const type=(parts[0]&&parts[0].type)||'audio/webm';
+  const blob=new Blob(parts,{type});
   if(blob.size<900){
     statusEl.textContent='🎙️ Escuchando…';
     return;
@@ -473,7 +466,16 @@ async function sendRecordedPhrase(){
       body:blob
     });
     const j=await r.json();
-    if(!r.ok)throw new Error(j.error||'asr_failed');
+    if(!r.ok){
+      if(j.error==='non_spanish_detected'){
+        busy=false;
+        statusEl.textContent='🎙️ Escuchando…';
+        heardEl.textContent='No lo detecté claramente en español. Repetí la frase.';
+        preRoll=[];
+        return;
+      }
+      throw new Error(j.error||'asr_failed');
+    }
     heardEl.textContent='Entendí: “'+j.text+'”';
     statusEl.textContent='🔊 Esperando voz JS…';
   }catch(e){
@@ -540,6 +542,25 @@ async function startAuto(){
   source.connect(analyser);
   dataArray=new Uint8Array(analyser.fftSize);
 
+  preRoll=[];
+  chunks=[];
+  const mime=bestMime();
+  try{
+    recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+  }catch{
+    recorder=new MediaRecorder(stream);
+  }
+  recorder.ondataavailable=e=>{
+    if(!e.data||!e.data.size||busy)return;
+    if(speechActive){
+      chunks.push(e.data);
+    }else{
+      preRoll.push(e.data);
+      while(preRoll.length>4)preRoll.shift();
+    }
+  };
+  recorder.start(120);
+
   autoMode=true;
   busy=false;
   speechActive=false;
@@ -555,8 +576,13 @@ function stopAuto(){
   busy=false;
   if(raf)cancelAnimationFrame(raf);
   raf=0;
-  if(speechActive)finishPhrase();
   speechActive=false;
+  try{
+    if(recorder&&recorder.state!=='inactive')recorder.stop();
+  }catch{}
+  recorder=null;
+  chunks=[];
+  preRoll=[];
   if(stream){
     for(const t of stream.getTracks())t.stop();
   }
@@ -684,9 +710,17 @@ const server = http.createServer(async (req, res) => {
       if (audio.length < 800) return json(res, 400, { ok: false, error: 'audio_too_short' });
 
       const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
-      const text = await transcribeVoice(audio, contentType);
+      const tx = await transcribeVoice(audio, contentType);
+      const text = tx.text;
 
       if (!text) return json(res, 422, { ok: false, error: 'no_speech_detected' });
+      if (tx.language_code && tx.language_code !== 'es') {
+        return json(res, 422, {
+          ok: false,
+          error: 'non_spanish_detected',
+          language_code: tx.language_code
+        });
+      }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
       const audioUrl = await makeVoice(text);
@@ -695,6 +729,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         text,
+        language_code: tx.language_code || 'es',
         audio_url: audioUrl,
         connected_players: clients.size
       });
