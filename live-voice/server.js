@@ -928,11 +928,12 @@ send.onclick=async()=>{
     }
 
     statusEl.textContent='✅ Mini JS respondió';
-    result.textContent=
-      'Respuesta: “'+j.reply+'”\n'+
-      'Emoción: '+j.emotion+'\n'+
-      'Animación: '+j.animation+'\n'+
-      'Prioridad: '+j.priority;
+    result.textContent=[
+      'Respuesta: “'+j.reply+'”',
+      'Emoción: '+j.emotion,
+      'Animación: '+j.animation,
+      'Prioridad: '+j.priority
+    ].join(String.fromCharCode(10));
 
     if(j.audio_url){
       audio.src=j.audio_url;
