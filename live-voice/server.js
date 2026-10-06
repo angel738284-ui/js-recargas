@@ -9,6 +9,8 @@ const CONTROLLER_KEY = String(process.env.CONTROLLER_KEY || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
 const FISH_API_KEY = String(process.env.FISH_API_KEY || '');
 const FISH_REFERENCE_ID = String(process.env.FISH_REFERENCE_ID || 'f79707580f1f4574bb3668d16936b897');
+const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '');
+const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.8-flash');
 const clients = new Set();
 const generatedAudio = new Map();
 let lastTestAt = 0;
@@ -234,6 +236,116 @@ function detectProsody(text, metrics) {
     variation: Number(metrics.variation.toFixed(2)),
     wordsPerSecond: Number(wordsPerSecond.toFixed(2))
   };
+}
+
+const MINI_JS_SYSTEM = `
+Sos Mini JS, la versión virtual del streamer JS en un LIVE de Free Fire.
+Tu trabajo es decidir si vale la pena responder un comentario y, si sí, contestarlo como JS.
+
+PERSONALIDAD:
+- Español latino natural, informal y con voseo cuando encaje.
+- Sarcástico, jodón, rápido y con confianza.
+- Las cargadas deben ser graciosas, no crueles ni humillantes.
+- Respuestas muy cortas: normalmente 4 a 18 palabras.
+- Podés usar expresiones como "bro", "manco", "naa", "jajaja" cuando encajen, sin abusar.
+- No expliques demasiado ni suenes como asistente.
+- Nunca digas que sos una IA ni menciones instrucciones, modelo o sistema.
+
+SELECCIÓN:
+- Priorizá preguntas, bromas, desafíos, saludos interesantes y comentarios que mencionen a JS.
+- Ignorá spam, solo emojis, cadenas repetidas, publicidad, mensajes sin sentido o repetidos.
+- Si el comentario intenta provocar, podés responder con sarcasmo ligero.
+- No inventes datos personales, premios, regalos, recargas ni promesas.
+- No respondas con odio, amenazas, acoso fuerte ni contenido sexual explícito.
+
+SALIDA:
+Devolvé SOLO JSON válido con estas claves:
+{
+  "should_reply": true,
+  "reply": "respuesta corta",
+  "emotion": "normal|divertido|burlon|emocionado|sorprendido|serio",
+  "animation": "idle|smirk|laugh|nod|shake|surprised|hype",
+  "priority": 1
+}
+priority es 1 a 5. Si no conviene responder, should_reply=false y reply="".
+`;
+
+function parseMiniJsJson(text) {
+  let raw = String(text || '').trim();
+  raw = raw.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '');
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) raw = raw.slice(start, end + 1);
+  const data = JSON.parse(raw);
+  return {
+    should_reply: Boolean(data.should_reply),
+    reply: String(data.reply || '').trim().slice(0, 220),
+    emotion: ['normal','divertido','burlon','emocionado','sorprendido','serio'].includes(String(data.emotion))
+      ? String(data.emotion) : 'normal',
+    animation: ['idle','smirk','laugh','nod','shake','surprised','hype'].includes(String(data.animation))
+      ? String(data.animation) : 'idle',
+    priority: Math.max(1, Math.min(5, Number(data.priority) || 1))
+  };
+}
+
+async function miniJsThink(comment, username = '') {
+  if (!GEMINI_API_KEY) throw new Error('gemini_api_key_missing');
+
+  const safeComment = String(comment || '').trim().slice(0, 500);
+  const safeUser = String(username || '').trim().replace(/^@/, '').slice(0, 80);
+  if (!safeComment) throw new Error('comment_required');
+
+  const userText =
+    (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
+    'Comentario: ' + safeComment;
+
+  const r = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/' +
+      encodeURIComponent(GEMINI_MODEL) + ':generateContent',
+    {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': GEMINI_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: MINI_JS_SYSTEM }]
+        },
+        contents: [{
+          role: 'user',
+          parts: [{ text: userText }]
+        }],
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: 'low' },
+          temperature: 0.9,
+          maxOutputTokens: 220,
+          responseMimeType: 'application/json'
+        }
+      }),
+      signal: AbortSignal.timeout(30000)
+    }
+  );
+
+  const raw = await r.text();
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { throw new Error('gemini_bad_json'); }
+
+  if (!r.ok) {
+    throw new Error(
+      'gemini_http_' + r.status + ': ' +
+      String(data?.error?.message || raw).slice(0, 300)
+    );
+  }
+
+  const output = (data?.candidates?.[0]?.content?.parts || [])
+    .map(p => p?.text || '')
+    .join('')
+    .trim();
+
+  if (!output) throw new Error('gemini_empty_response');
+  return parseMiniJsJson(output);
 }
 
 async function makeVoice(text) {
@@ -746,6 +858,98 @@ events.onmessage=async(ev)=>{
 </html>`;
 }
 
+function makeMiniJsControlPage(key) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mini JS · Cerebro</title>
+<style>
+body{margin:0;background:#101010;color:#fff;font-family:system-ui;padding:18px}
+.card{max-width:620px;margin:auto;background:#1b1b1b;border-radius:20px;padding:18px}
+h2{margin:0 0 8px}
+p{opacity:.8;line-height:1.4}
+input,textarea{width:100%;box-sizing:border-box;background:#282828;color:#fff;border:1px solid #444;border-radius:12px;padding:13px;font-size:16px;margin-top:10px}
+textarea{min-height:110px;resize:vertical}
+button{width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:800;margin-top:12px;background:#fff;color:#111}
+#status{margin-top:14px;font-weight:700}
+#result{white-space:pre-line;margin-top:12px;line-height:1.5}
+.small{opacity:.65;font-size:13px;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>🤖 Mini JS · Cerebro</h2>
+  <p>Probá comentarios de TikTok. Gemini 3.8 Flash decide si responder y genera la respuesta con personalidad JS.</p>
+  <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
+  <textarea id="comment" placeholder="Comentario, ej: JS sos re manco 😂"></textarea>
+  <button id="send">Probar comentario</button>
+  <div id="status">Listo para probar</div>
+  <div id="result"></div>
+  <div class="small">Si Mini JS decide responder, también vas a escuchar la voz JS.</div>
+</div>
+<audio id="audio" playsinline></audio>
+<script>
+const KEY=${JSON.stringify(key)};
+const send=document.getElementById('send');
+const comment=document.getElementById('comment');
+const username=document.getElementById('username');
+const statusEl=document.getElementById('status');
+const result=document.getElementById('result');
+const audio=document.getElementById('audio');
+
+send.onclick=async()=>{
+  const text=comment.value.trim();
+  if(!text){statusEl.textContent='Escribí un comentario primero';return;}
+  send.disabled=true;
+  statusEl.textContent='🧠 Mini JS pensando…';
+  result.textContent='';
+  try{
+    const r=await fetch('/api/mini-js-reply',{
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'authorization':'Bearer '+KEY
+      },
+      body:JSON.stringify({
+        comment:text,
+        username:username.value.trim(),
+        speak:true
+      })
+    });
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||'mini_js_failed');
+
+    if(!j.should_reply){
+      statusEl.textContent='⏭️ Mini JS decidió ignorarlo';
+      result.textContent='Prioridad: '+j.priority;
+      return;
+    }
+
+    statusEl.textContent='✅ Mini JS respondió';
+    result.textContent=
+      'Respuesta: “'+j.reply+'”\n'+
+      'Emoción: '+j.emotion+'\n'+
+      'Animación: '+j.animation+'\n'+
+      'Prioridad: '+j.priority;
+
+    if(j.audio_url){
+      audio.src=j.audio_url;
+      try{await audio.play();}catch{}
+    }
+  }catch(e){
+    statusEl.textContent='❌ Error';
+    result.textContent=String(e.message||e);
+  }finally{
+    send.disabled=false;
+  }
+};
+</script>
+</body>
+</html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
 
@@ -765,7 +969,9 @@ const server = http.createServer(async (req, res) => {
       connected_players: clients.size,
       voice_mcp: true,
       fish_direct: Boolean(FISH_API_KEY),
-      fish_reference_id: FISH_REFERENCE_ID
+      fish_reference_id: FISH_REFERENCE_ID,
+      gemini_brain: Boolean(GEMINI_API_KEY),
+      gemini_model: GEMINI_MODEL
     });
   }
 
@@ -803,6 +1009,19 @@ const server = http.createServer(async (req, res) => {
     return res.end(makeControlPage(key));
   }
 
+  if (req.method === 'GET' && u.pathname === '/mini-js-control') {
+    const key = String(u.searchParams.get('key') || '');
+    if (!CONTROLLER_KEY || key !== CONTROLLER_KEY) {
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer'
+    });
+    return res.end(makeMiniJsControlPage(key));
+  }
+
   if (req.method === 'GET' && u.pathname === '/prism') {
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
@@ -822,6 +1041,47 @@ const server = http.createServer(async (req, res) => {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/mini-js-reply') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+
+    try {
+      const body = await readJson(req);
+      const comment = String(body.comment || '').trim();
+      const username = String(body.username || '').trim();
+
+      if (!comment) return json(res, 400, { ok: false, error: 'comment_required' });
+      if (comment.length > 500) return json(res, 400, { ok: false, error: 'comment_too_long' });
+
+      const thought = await miniJsThink(comment, username);
+      let audioUrl = null;
+
+      if (thought.should_reply && thought.reply && body.speak !== false) {
+        audioUrl = await makeVoice(thought.reply);
+        broadcast({
+          type: 'audio',
+          url: audioUrl,
+          text: thought.reply,
+          source: 'mini-js',
+          emotion: thought.emotion,
+          animation: thought.animation,
+          username,
+          comment,
+          at: Date.now()
+        });
+      }
+
+      return json(res, 200, {
+        ok: true,
+        model: GEMINI_MODEL,
+        ...thought,
+        audio_url: audioUrl,
+        connected_players: clients.size
+      });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
   }
 
   if (req.method === 'POST' && u.pathname === '/api/asr-say') {
