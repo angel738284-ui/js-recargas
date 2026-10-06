@@ -299,53 +299,86 @@ async function miniJsThink(comment, username = '') {
     (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
     'Comentario: ' + safeComment;
 
-  const r = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' +
-      encodeURIComponent(GEMINI_MODEL) + ':generateContent',
-    {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': GEMINI_API_KEY,
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: MINI_JS_SYSTEM }]
+  const requestModel = async (model) => {
+    const r = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' +
+        encodeURIComponent(model) + ':generateContent',
+      {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': GEMINI_API_KEY,
+          'content-type': 'application/json'
         },
-        contents: [{
-          role: 'user',
-          parts: [{ text: userText }]
-        }],
-        generationConfig: {
-          thinkingConfig: { thinkingLevel: 'low' },
-          temperature: 0.9,
-          maxOutputTokens: 220,
-          responseMimeType: 'application/json'
-        }
-      }),
-      signal: AbortSignal.timeout(30000)
-    }
-  );
-
-  const raw = await r.text();
-  let data;
-  try { data = JSON.parse(raw); }
-  catch { throw new Error('gemini_bad_json'); }
-
-  if (!r.ok) {
-    throw new Error(
-      'gemini_http_' + r.status + ': ' +
-      String(data?.error?.message || raw).slice(0, 300)
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: MINI_JS_SYSTEM }]
+          },
+          contents: [{
+            role: 'user',
+            parts: [{ text: userText }]
+          }],
+          generationConfig: {
+            thinkingConfig: { thinkingLevel: 'low' },
+            temperature: 0.9,
+            maxOutputTokens: 220,
+            responseMimeType: 'application/json'
+          }
+        }),
+        signal: AbortSignal.timeout(30000)
+      }
     );
+
+    const raw = await r.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch { throw new Error('gemini_bad_json'); }
+
+    if (!r.ok) {
+      const err = new Error(
+        'gemini_http_' + r.status + ': ' +
+        String(data?.error?.message || raw).slice(0, 300)
+      );
+      err.status = r.status;
+      throw err;
+    }
+
+    const output = (data?.candidates?.[0]?.content?.parts || [])
+      .map(p => p?.text || '')
+      .join('')
+      .trim();
+
+    if (!output) throw new Error('gemini_empty_response');
+    return { ...parseMiniJsJson(output), model };
+  };
+
+  const isTransient = (e) =>
+    [429, 500, 502, 503, 504].includes(Number(e?.status));
+
+  let lastError = null;
+
+  // 3.8 is always primary. Retry once for temporary overloads.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await requestModel(GEMINI_MODEL);
+    } catch (e) {
+      lastError = e;
+      if (!isTransient(e)) throw e;
+      if (attempt === 0) {
+        await new Promise(resolve => setTimeout(resolve, 650));
+      }
+    }
   }
 
-  const output = (data?.candidates?.[0]?.content?.parts || [])
-    .map(p => p?.text || '')
-    .join('')
-    .trim();
+  // Live reliability fallback: only used when the primary is overloaded.
+  if (GEMINI_MODEL !== 'gemini-3.6-flash') {
+    try {
+      return await requestModel('gemini-3.6-flash');
+    } catch (e) {
+      lastError = e;
+    }
+  }
 
-  if (!output) throw new Error('gemini_empty_response');
-  return parseMiniJsJson(output);
+  throw lastError || new Error('gemini_unavailable');
 }
 
 async function makeVoice(text) {
@@ -932,7 +965,8 @@ send.onclick=async()=>{
       'Respuesta: “'+j.reply+'”',
       'Emoción: '+j.emotion,
       'Animación: '+j.animation,
-      'Prioridad: '+j.priority
+      'Prioridad: '+j.priority,
+      'Modelo: '+(j.model||'gemini')
     ].join(String.fromCharCode(10));
 
     if(j.audio_url){
