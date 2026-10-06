@@ -385,7 +385,7 @@ async function miniJsThink(comment, username = '') {
   const isTransient = (e) =>
     [429, 500, 502, 503, 504].includes(Number(e?.status));
 
-  const requestKie = async () => {
+  const requestKie = async (model) => {
     const r = await fetch('https://api.kie.ai/codex/v1/responses', {
       method: 'POST',
       headers: {
@@ -393,7 +393,7 @@ async function miniJsThink(comment, username = '') {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: KIE_MODEL,
+        model,
         stream: false,
         input: [{
           role: 'user',
@@ -434,7 +434,7 @@ async function miniJsThink(comment, username = '') {
       .trim();
 
     if (!output) throw new Error('kie_empty_response');
-    return { ...parseMiniJsJson(output), model: KIE_MODEL, provider: 'kie' };
+    return { ...parseMiniJsJson(output), model, provider: 'kie' };
   };
 
   const requestGemini = async (model) => {
@@ -495,32 +495,32 @@ async function miniJsThink(comment, username = '') {
 
   let lastError = null;
 
-  // Primary brain: Kie GPT 6.1 Sol.
+  // Fast LIVE brain: Kie GPT 6 Luna. No retry delay.
   if (KIE_API_KEY) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await requestKie(KIE_MODEL);
+    } catch (e) {
+      lastError = e;
+    }
+
+    // Stronger Kie fallback only if Luna fails.
+    if (KIE_MODEL !== 'gpt-6-1-sol') {
       try {
-        return await requestKie();
+        return await requestKie('gpt-6-1-sol');
       } catch (e) {
         lastError = e;
-        if (!isTransient(e) || attempt === 1) break;
-        await new Promise(resolve => setTimeout(resolve, 450));
       }
     }
   }
 
-  // Fallback 1: Gemini 3.8 Flash.
+  // Gemini fallbacks, one attempt each to avoid long waits in a LIVE.
   if (GEMINI_API_KEY) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        return await requestGemini(GEMINI_MODEL);
-      } catch (e) {
-        lastError = e;
-        if (!isTransient(e) || attempt === 1) break;
-        await new Promise(resolve => setTimeout(resolve, 600));
-      }
+    try {
+      return await requestGemini(GEMINI_MODEL);
+    } catch (e) {
+      lastError = e;
     }
 
-    // Fallback 2: Gemini 3.6 Flash for live reliability.
     if (GEMINI_MODEL !== 'gemini-3.6-flash') {
       try {
         return await requestGemini('gemini-3.6-flash');
@@ -1309,7 +1309,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
 
 <div class="card">
   <h2>🤖 Mini JS · Prueba manual</h2>
-  <p>GPT 6.1 Sol de Kie es el cerebro principal; Gemini queda como respaldo.</p>
+  <p>GPT 6 Luna de Kie es el cerebro rápido del LIVE; Sol y Gemini quedan como respaldo.</p>
   <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
   <textarea id="comment" placeholder="Comentario, ej: JS sos re manco 😂"></textarea>
   <button id="send">Probar comentario</button>
