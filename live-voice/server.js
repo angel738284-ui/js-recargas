@@ -103,6 +103,66 @@ async function transcribeVoice(buffer, contentType) {
   };
 }
 
+function detectProsody(text, u) {
+  const num = (name, fallback) => {
+    const v = Number(u.searchParams.get(name));
+    return Number.isFinite(v) ? v : fallback;
+  };
+
+  const avg = Math.max(0, num('avg', 0));
+  const peak = Math.max(0, num('peak', 0));
+  const variation = Math.max(0, num('variation', 0));
+  const noise = Math.max(0.001, num('noise', 0.006));
+  const duration = Math.min(20, Math.max(0.35, num('duration', 1)));
+
+  const levelRatio = Math.min(20, avg / noise);
+  const peakRatio = Math.min(40, peak / noise);
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  const speakingSeconds = Math.max(0.45, duration - 0.72);
+  const wordsPerSecond = words / speakingSeconds;
+
+  const fast = wordsPerSecond >= 3.0;
+  const slow = wordsPerSecond <= 1.65;
+  const soft = levelRatio < 2.7 && peakRatio < 5.5;
+  const loud = levelRatio >= 5.5 || peakRatio >= 10;
+  const expressive = variation >= 0.55;
+
+  let label = 'normal';
+  let tags = [];
+
+  if ((fast && loud) || (fast && expressive && levelRatio >= 3.2)) {
+    label = 'emocionado · rápido';
+    tags = ['[excited]', '[speaking quickly]'];
+  } else if (loud) {
+    label = 'fuerte · enérgico';
+    tags = ['[loud voice]', '[emphasis]'];
+  } else if (soft && slow) {
+    label = 'suave · despacio';
+    tags = ['[soft voice]', '[speaking slowly]'];
+  } else if (soft) {
+    label = 'suave';
+    tags = ['[soft voice]'];
+  } else if (slow) {
+    label = 'despacio';
+    tags = ['[speaking slowly]'];
+  } else if (fast) {
+    label = 'rápido';
+    tags = ['[speaking quickly]'];
+  } else if (expressive) {
+    label = 'expresivo';
+    tags = ['[emphasis]'];
+  }
+
+  return {
+    label,
+    tags,
+    levelRatio: Number(levelRatio.toFixed(2)),
+    peakRatio: Number(peakRatio.toFixed(2)),
+    variation: Number(variation.toFixed(2)),
+    wordsPerSecond: Number(wordsPerSecond.toFixed(2))
+  };
+}
+
 async function makeVoice(text) {
   if (FISH_API_KEY) {
     const r = await fetch('https://api.fish.audio/v1/tts', {
@@ -350,7 +410,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 #start{background:#fff;color:#111}
 #stop{background:#333;color:#fff}
 #status{margin-top:14px;font-weight:700}
-#heard{margin-top:12px;line-height:1.4;min-height:48px}
+#heard{margin-top:12px;line-height:1.4;min-height:48px;white-space:pre-line}
 .small{opacity:.75;font-size:13px;margin-top:10px}
 </style>
 </head>
@@ -388,6 +448,11 @@ let phraseStarted=0;
 let threshold=0.026;
 let noiseFloor=0.008;
 let calibratingUntil=0;
+let phraseRmsSum=0;
+let phraseRmsSqSum=0;
+let phraseRmsCount=0;
+let phrasePeak=0;
+let pendingProsody=null;
 
 async function unlockAudio(){
   try{
@@ -438,11 +503,28 @@ function beginPhrase(){
   speechActive=true;
   silenceSince=0;
   phraseStarted=Date.now();
+  phraseRmsSum=0;
+  phraseRmsSqSum=0;
+  phraseRmsCount=0;
+  phrasePeak=0;
+  pendingProsody=null;
   statusEl.textContent='🎙️ Escuchando tu frase…';
 }
 
 function finishPhrase(){
   if(!speechActive)return;
+  const durationMs=Math.max(1,Date.now()-phraseStarted);
+  const avg=phraseRmsCount ? phraseRmsSum/phraseRmsCount : 0;
+  const meanSq=phraseRmsCount ? phraseRmsSqSum/phraseRmsCount : 0;
+  const variance=Math.max(0,meanSq-avg*avg);
+  const variation=avg>0 ? Math.sqrt(variance)/avg : 0;
+  pendingProsody={
+    avg,
+    peak:phrasePeak,
+    variation,
+    noise:Math.max(noiseFloor,0.001),
+    duration:durationMs/1000
+  };
   speechActive=false;
   silenceSince=0;
   try{
@@ -467,8 +549,18 @@ async function sendRecordedPhrase(){
   statusEl.textContent='📝 Fish transcribiendo…';
   heardEl.textContent='';
 
+  const p=pendingProsody||{avg:0,peak:0,variation:0,noise:0.001,duration:1};
+  pendingProsody=null;
+  const qs=new URLSearchParams({
+    avg:String(p.avg||0),
+    peak:String(p.peak||0),
+    variation:String(p.variation||0),
+    noise:String(p.noise||0.001),
+    duration:String(p.duration||1)
+  });
+
   try{
-    const r=await fetch('/api/asr-say',{
+    const r=await fetch('/api/asr-say?'+qs.toString(),{
       method:'POST',
       headers:{
         'content-type':blob.type||'audio/webm',
@@ -486,7 +578,7 @@ async function sendRecordedPhrase(){
       }
       throw new Error(j.error||'asr_failed');
     }
-    heardEl.textContent='Entendí: “'+j.text+'”';
+    heardEl.textContent='Entendí: “'+j.text+'”\nEstilo: '+(j.style_label||'normal');
     statusEl.textContent='🔊 Esperando voz JS…';
   }catch(e){
     busy=false;
@@ -512,6 +604,11 @@ function vadLoop(){
         beginPhrase();
       }
     }else{
+      phraseRmsSum+=rms;
+      phraseRmsSqSum+=rms*rms;
+      phraseRmsCount++;
+      if(rms>phrasePeak)phrasePeak=rms;
+
       if(rms>threshold*0.82){
         silenceSince=0;
       }else{
@@ -535,7 +632,7 @@ async function startAuto(){
       audio:{
         echoCancellation:true,
         noiseSuppression:true,
-        autoGainControl:true
+        autoGainControl:false
       }
     });
   }catch(e){
@@ -712,12 +809,28 @@ const server = http.createServer(async (req, res) => {
       }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
-      const audioUrl = await makeVoice(text);
-      broadcast({ type: 'audio', url: audioUrl, text, at: Date.now(), asr: 'fish' });
+      const prosody = detectProsody(text, u);
+      const styledText = (prosody.tags.length ? prosody.tags.join(' ') + ' ' : '') + text;
+      const audioUrl = await makeVoice(styledText);
+      broadcast({
+        type: 'audio',
+        url: audioUrl,
+        text,
+        style: prosody.label,
+        at: Date.now(),
+        asr: 'fish'
+      });
 
       return json(res, 200, {
         ok: true,
         text,
+        style_label: prosody.label,
+        style_metrics: {
+          level_ratio: prosody.levelRatio,
+          peak_ratio: prosody.peakRatio,
+          variation: prosody.variation,
+          words_per_second: prosody.wordsPerSecond
+        },
         language_code: tx.language_code || 'es',
         audio_url: audioUrl,
         connected_players: clients.size
