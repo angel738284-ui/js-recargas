@@ -6,6 +6,7 @@ const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
 const clients = new Set();
 let lastTestAt = 0;
+let lastBrowserSayAt = 0;
 
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -84,7 +85,7 @@ const prismPage = `<!doctype html>
 html,body{margin:0;background:transparent;overflow:hidden;font-family:system-ui}
 #panel{position:fixed;left:10px;bottom:10px;background:rgba(0,0,0,.68);color:#fff;
 border-radius:12px;padding:8px 10px;font-size:13px}
-#unlock,#test{border:0;border-radius:9px;padding:7px 10px;font-weight:700;margin-left:4px}
+#unlock,#test,#talk{border:0;border-radius:9px;padding:9px 12px;font-weight:700;margin-left:4px}\n#talk{font-size:16px;touch-action:none;user-select:none;-webkit-user-select:none}\n#transcript{margin-top:8px;max-width:320px;white-space:normal;line-height:1.25}
 </style>
 </head>
 <body>
@@ -93,13 +94,20 @@ border-radius:12px;padding:8px 10px;font-size:13px}
   <span id="status">Conectando voz IA…</span>
   <button id="unlock">Activar audio</button>
   <button id="test">Probar voz</button>
+  <button id="talk">🎙️ Mantener para hablar</button>
+  <div id="transcript"></div>
 </div>
 <script>
 const audio=document.getElementById('audio');
 const statusEl=document.getElementById('status');
 const unlockBtn=document.getElementById('unlock');
 const testBtn=document.getElementById('test');
+const talkBtn=document.getElementById('talk');
+const transcriptEl=document.getElementById('transcript');
 let unlocked=false;
+let recognition=null;
+let currentText='';
+let sending=false;
 
 async function unlockAudio(){
   try{
@@ -128,6 +136,95 @@ testBtn.onclick=async()=>{
     statusEl.textContent='Error en prueba';
   }
 };
+
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+
+async function sendRecognized(text){
+  text=String(text||'').trim();
+  if(!text||sending)return;
+  sending=true;
+  transcriptEl.textContent='Entendí: “'+text+'”';
+  statusEl.textContent='Generando voz IA…';
+  try{
+    const r=await fetch('/api/browser-say',{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({text})
+    });
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||'say_failed');
+    statusEl.textContent='Audio enviado…';
+  }catch(e){
+    statusEl.textContent='Error: '+String(e.message||e);
+  }finally{
+    sending=false;
+  }
+}
+
+function setupRecognition(){
+  if(!SpeechRecognition){
+    talkBtn.disabled=true;
+    talkBtn.textContent='🎙️ Usá Chrome para hablar';
+    transcriptEl.textContent='Este navegador no ofrece reconocimiento de voz.';
+    return;
+  }
+  recognition=new SpeechRecognition();
+  recognition.lang='es-AR';
+  recognition.interimResults=true;
+  recognition.continuous=false;
+  recognition.maxAlternatives=1;
+
+  recognition.onstart=()=>{
+    currentText='';
+    statusEl.textContent='🎙️ Te escucho… hablá y soltá';
+    transcriptEl.textContent='';
+    talkBtn.textContent='🔴 Escuchando… soltá para enviar';
+  };
+
+  recognition.onresult=(event)=>{
+    let text='';
+    for(let i=0;i<event.results.length;i++){
+      text+=event.results[i][0].transcript+' ';
+    }
+    currentText=text.trim();
+    transcriptEl.textContent=currentText ? 'Escuchando: “'+currentText+'”' : '';
+  };
+
+  recognition.onerror=(event)=>{
+    const e=String(event.error||'error');
+    if(e==='not-allowed'||e==='service-not-allowed'){
+      statusEl.textContent='Permití el micrófono en el navegador';
+    }else if(e!=='aborted'){
+      statusEl.textContent='No pude escuchar: '+e;
+    }
+  };
+
+  recognition.onend=()=>{
+    talkBtn.textContent='🎙️ Mantener para hablar';
+    const text=currentText.trim();
+    currentText='';
+    if(text)sendRecognized(text);
+  };
+}
+
+setupRecognition();
+
+talkBtn.onpointerdown=(e)=>{
+  e.preventDefault();
+  if(sending||!recognition)return;
+  unlockAudio();
+  try{recognition.start();}catch{}
+};
+
+function stopTalking(e){
+  if(e)e.preventDefault();
+  if(!recognition)return;
+  try{recognition.stop();}catch{}
+}
+talkBtn.onpointerup=stopTalking;
+talkBtn.onpointercancel=stopTalking;
+talkBtn.onpointerleave=(e)=>{if(e.buttons)stopTalking(e);};
+
 document.body.addEventListener('pointerdown',()=>{if(!unlocked)unlockAudio()},{once:true});
 
 const events=new EventSource('/events');
@@ -200,6 +297,30 @@ const server = http.createServer(async (req, res) => {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/browser-say') {
+    try {
+      const now = Date.now();
+      if (now - lastBrowserSayAt < 2500) {
+        return json(res, 429, { ok: false, error: 'Esperá un momento antes de volver a hablar.' });
+      }
+      const body = await readJson(req);
+      const text = String(body.text || '').trim();
+      if (!text) return json(res, 400, { ok: false, error: 'No entendí ninguna frase.' });
+      if (text.length > 220) return json(res, 400, { ok: false, error: 'La frase es demasiado larga para esta prueba.' });
+
+      lastBrowserSayAt = now;
+      const audioUrl = await makeVoice(text);
+      broadcast({ type: 'audio', url: audioUrl, text, at: now, browser: true });
+      return json(res, 200, {
+        ok: true,
+        audio_url: audioUrl,
+        connected_players: clients.size
+      });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
   }
 
   if (req.method === 'POST' && u.pathname === '/api/test') {
