@@ -249,7 +249,8 @@ PERSONALIDAD:
 - Sarcástico, jodón, rápido y con confianza.
 - Las cargadas deben ser graciosas, no crueles ni humillantes.
 - Respuestas muy cortas: normalmente 4 a 18 palabras.
-- Podés usar expresiones como "bro", "manco", "naa", "jajaja" cuando encajen, sin abusar.
+- Podés usar expresiones como "bro", "manco" o "naa" cuando encajen, sin abusar.
+- No escribas risas onomatopéyicas como "jajaja", "jejeje", "hahaha" ni cadenas de risa; la voz puede alargarlas demasiado.
 - No expliques demasiado ni suenes como asistente.
 - Nunca digas que sos una IA ni menciones instrucciones, modelo o sistema.
 
@@ -271,6 +272,29 @@ Devolvé SOLO JSON válido con estas claves:
 }
 priority es 1 a 5. Si no conviene responder, should_reply=false y reply="".
 `;
+
+function sanitizeMiniJsSpeech(text) {
+  let s = String(text || '').trim();
+
+  s = s
+    .replace(/\b(?:ja){2,}\b/gi, 'naa')
+    .replace(/\bja(?:\s+ja){1,}\b/gi, 'naa')
+    .replace(/\b(?:je){2,}\b/gi, 'naa')
+    .replace(/\bje(?:\s+je){1,}\b/gi, 'naa')
+    .replace(/\b(?:ha){2,}\b/gi, 'naa')
+    .replace(/\bha(?:\s+ha){1,}\b/gi, 'naa')
+    .replace(/[😂🤣]+/gu, '')
+    .replace(/\bnaa(?:\s+naa)+\b/gi, 'naa')
+    .replace(/(.)\1{5,}/g, '$1$1$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length > 18) s = words.slice(0, 18).join(' ');
+
+  s = s.slice(0, 140).trim();
+  return s || 'Naa, bro.';
+}
 
 function parseMiniJsJson(text) {
   let raw = String(text || '').trim();
@@ -1168,11 +1192,13 @@ const server = http.createServer(async (req, res) => {
       let audioUrl = null;
 
       if (thought.should_reply && thought.reply && body.speak !== false) {
-        audioUrl = await makeVoice(thought.reply);
+        const speechText = sanitizeMiniJsSpeech(thought.reply);
+        audioUrl = await makeVoice(speechText);
         broadcast({
           type: 'audio',
           url: audioUrl,
           text: thought.reply,
+          spoken_text: speechText,
           source: 'mini-js',
           emotion: thought.emotion,
           animation: thought.animation,
