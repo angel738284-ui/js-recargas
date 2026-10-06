@@ -100,7 +100,7 @@ async function transcribeVoice(buffer, contentType) {
   );
   form.append('language', 'es');
   form.append('ignore_timestamps', 'true');
-  form.append('tag_audio_events', 'false');
+  form.append('tag_audio_events', 'true');
 
   const r = await fetch('https://api.fish.audio/v1/asr', {
     method: 'POST',
@@ -121,8 +121,19 @@ async function transcribeVoice(buffer, contentType) {
     throw new Error('asr_http_' + r.status + ': ' + String(data?.message || raw).slice(0,300));
   }
 
+  const taggedText = String(data?.text || '').trim();
+  const audioTags = [...taggedText.matchAll(/\[([^\]\n]{1,60})\]/g)]
+    .map(m => String(m[1] || '').trim())
+    .filter(Boolean);
+  const cleanText = taggedText
+    .replace(/\[[^\]\n]{1,60}\]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   return {
-    text: String(data?.text || '').trim(),
+    text: cleanText || taggedText,
+    tagged_text: taggedText,
+    audio_tags: audioTags,
     language_code: String(data?.language_code || '').toLowerCase(),
     language: String(data?.language || '')
   };
@@ -1692,12 +1703,13 @@ const server = http.createServer(async (req, res) => {
 
       const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
 
-      // Fast LIVE path: ASR and expression analysis run in parallel.
-      // Expression is allowed to add at most ~250 ms after ASR finishes.
-      const prosodyPromise = analyzeAudioProsody(audio).catch(() => null);
+      // Fish ASR detects emotion/paralanguage itself.
+      // Its inline tags are sent directly back into Fish S2.1 TTS.
       const tx = await transcribeVoice(audio, contentType);
       const asrMs = Date.now() - startedAt;
       const text = tx.text;
+      const taggedText = String(tx.tagged_text || text).trim();
+      const audioTags = Array.isArray(tx.audio_tags) ? tx.audio_tags : [];
 
       if (!text) return json(res, 422, { ok: false, error: 'no_speech_detected' });
       if (tx.language_code && tx.language_code !== 'es') {
@@ -1709,23 +1721,19 @@ const server = http.createServer(async (req, res) => {
       }
       if (text.length > 500) return json(res, 400, { ok: false, error: 'transcript_too_long' });
 
-      const acousticMetrics = await Promise.race([
-        prosodyPromise,
-        new Promise(resolve => setTimeout(() => resolve(null), 250))
-      ]);
-      const prosody = detectProsody(text, acousticMetrics);
-      const styledText = (prosody.tags.length ? prosody.tags.join(' ') + ' ' : '') + text;
-
       const ttsStartedAt = Date.now();
-      const audioUrl = await makeVoice(styledText);
+      const audioUrl = await makeVoice(taggedText || text);
       const ttsMs = Date.now() - ttsStartedAt;
       const totalMs = Date.now() - startedAt;
+      const styleLabel = audioTags.length ? audioTags.join(' · ') : 'sin etiqueta';
 
       broadcast({
         type: 'audio',
         url: audioUrl,
         text,
-        style: prosody.label,
+        spoken_text: taggedText || text,
+        style: styleLabel,
+        fish_tags: audioTags,
         at: Date.now(),
         asr: 'fish',
         asr_ms: asrMs,
@@ -1736,7 +1744,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         text,
-        style_label: prosody.label,
+        tagged_text: taggedText || text,
+        audio_tags: audioTags,
+        style_label: styleLabel,
         language_code: tx.language_code || 'es',
         audio_url: audioUrl,
         asr_ms: asrMs,
