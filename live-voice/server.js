@@ -334,12 +334,50 @@ let phraseBuffer='';
 let latestInterim='';
 let silenceTimer=null;
 
+function normWords(s){
+  return String(s||'')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9áéíóúüñ ]/gi,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function mergeTranscript(base, incoming){
+  base=String(base||'').trim();
+  incoming=String(incoming||'').trim();
+  if(!base)return incoming;
+  if(!incoming)return base;
+
+  const nb=normWords(base);
+  const ni=normWords(incoming);
+
+  if(ni===nb)return base;
+  if(ni.startsWith(nb+' '))return incoming;
+  if(nb.startsWith(ni+' '))return base;
+
+  const bw=base.split(/\s+/);
+  const iw=incoming.split(/\s+/);
+  const bn=bw.map(normWords);
+  const inn=iw.map(normWords);
+  let overlap=0;
+  const max=Math.min(bn.length,inn.length);
+  for(let k=max;k>=1;k--){
+    let same=true;
+    for(let j=0;j<k;j++){
+      if(bn[bn.length-k+j]!==inn[j]){same=false;break;}
+    }
+    if(same){overlap=k;break;}
+  }
+  return (base+' '+iw.slice(overlap).join(' ')).replace(/\s+/g,' ').trim();
+}
+
 function schedulePhraseFlush(){
   if(silenceTimer)clearTimeout(silenceTimer);
   silenceTimer=setTimeout(()=>{
     silenceTimer=null;
     if(busy||!autoMode)return;
-    const text=(phraseBuffer+' '+latestInterim).replace(/\s+/g,' ').trim();
+    const text=String(phraseBuffer||latestInterim||'').replace(/\s+/g,' ').trim();
     phraseBuffer='';
     latestInterim='';
     if(text){
@@ -374,25 +412,23 @@ function buildRecognition(){
   };
 
   rec.onresult=(event)=>{
+    let snapshot='';
     let interim='';
-    let finalText='';
-    for(let i=event.resultIndex;i<event.results.length;i++){
-      const t=event.results[i][0].transcript.trim();
-      if(event.results[i].isFinal) finalText+=(finalText?' ':'')+t;
-      else interim+=(interim?' ':'')+t;
+
+    for(let i=0;i<event.results.length;i++){
+      const t=String(event.results[i][0].transcript||'').trim();
+      if(!t)continue;
+      snapshot=mergeTranscript(snapshot,t);
+      if(!event.results[i].isFinal)interim=t;
     }
 
-    if(finalText){
-      phraseBuffer=(phraseBuffer+' '+finalText).replace(/\s+/g,' ').trim();
-      latestInterim='';
-    }else{
-      latestInterim=interim.trim();
+    phraseBuffer=snapshot.trim();
+    latestInterim=interim.trim();
+
+    if(phraseBuffer){
+      heardEl.textContent='Escuchando: “'+phraseBuffer+'”';
+      schedulePhraseFlush();
     }
-
-    const preview=(phraseBuffer+' '+latestInterim).replace(/\s+/g,' ').trim();
-    if(preview)heardEl.textContent='Escuchando: “'+preview+'”';
-
-    schedulePhraseFlush();
   };
 
   rec.onerror=(e)=>{
