@@ -110,7 +110,7 @@ const prismPage = `<!doctype html>
 html,body{margin:0;background:transparent;overflow:hidden;font-family:system-ui}
 #panel{position:fixed;left:10px;bottom:10px;background:rgba(0,0,0,.68);color:#fff;
 border-radius:12px;padding:8px 10px;font-size:13px}
-#unlock,#test,#talk{border:0;border-radius:9px;padding:9px 12px;font-weight:700;margin-left:4px}\n#talk{font-size:16px;touch-action:none;user-select:none;-webkit-user-select:none}\n#transcript{margin-top:8px;max-width:320px;white-space:normal;line-height:1.25}
+#unlock,#test,#talk{border:0;border-radius:9px;padding:9px 12px;font-weight:700;margin-left:4px}\n#test,#talk{display:none}\n#talk{font-size:16px;touch-action:none;user-select:none;-webkit-user-select:none}\n#transcript{margin-top:8px;max-width:320px;white-space:normal;line-height:1.25}
 </style>
 </head>
 <body>
@@ -344,6 +344,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && u.pathname === '/api/browser-say') {
+    if (!isAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
       const now = Date.now();
       if (now - lastBrowserSayAt < 2500) {
@@ -368,6 +369,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && u.pathname === '/api/test') {
+    if (!isAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
       const now = Date.now();
       if (now - lastTestAt < 10000) {
