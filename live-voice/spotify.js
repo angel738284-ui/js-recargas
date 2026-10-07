@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const CLIENT_ID = String(process.env.SPOTIFY_CLIENT_ID || '');
 const REDIRECT_URI = String(process.env.SPOTIFY_REDIRECT_URI || 'https://js-live-voice.onrender.com/spotify/callback');
 const CONTROLLER_KEY = String(process.env.CONTROLLER_KEY || '');
+const SPOTIFY_SETUP_KEY = String(process.env.SPOTIFY_SETUP_KEY || '');
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
 const TOKEN_FILE = String(process.env.SPOTIFY_TOKEN_FILE || path.join(os.tmpdir(), 'js-live-spotify-token.json'));
 
@@ -57,6 +58,7 @@ async function readJson(req) {
 function authorized(req) {
   const auth = String(req.headers.authorization || '');
   return (CONTROLLER_KEY && auth === 'Bearer ' + CONTROLLER_KEY) ||
+    (SPOTIFY_SETUP_KEY && auth === 'Bearer ' + SPOTIFY_SETUP_KEY) ||
     (LIVE_TOKEN && auth === 'Bearer ' + LIVE_TOKEN);
 }
 
@@ -216,7 +218,7 @@ async function handle(req, res, u) {
 
   if (req.method === 'GET' && u.pathname === '/spotify-control') {
     const key = String(u.searchParams.get('key') || '');
-    if (!CONTROLLER_KEY || key !== CONTROLLER_KEY) {
+    if (!((CONTROLLER_KEY && key === CONTROLLER_KEY) || (SPOTIFY_SETUP_KEY && key === SPOTIFY_SETUP_KEY))) {
       sendJson(res, 404, { ok:false, error:'not_found' });
       return true;
     }
@@ -226,7 +228,7 @@ async function handle(req, res, u) {
 
   if (req.method === 'GET' && u.pathname === '/spotify/login') {
     const key = String(u.searchParams.get('key') || '');
-    if (!CONTROLLER_KEY || key !== CONTROLLER_KEY) {
+    if (!((CONTROLLER_KEY && key === CONTROLLER_KEY) || (SPOTIFY_SETUP_KEY && key === SPOTIFY_SETUP_KEY))) {
       sendJson(res, 404, { ok:false, error:'not_found' });
       return true;
     }
