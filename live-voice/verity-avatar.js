@@ -29,34 +29,39 @@ module.exports = function createVerityAvatar({broadcast, controllerKey, isAuthor
 <title>Mini Verity</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent!important}
-#actor{position:fixed;bottom:0;left:0;width:165px;max-width:100vw;pointer-events:none;transform-origin:bottom center}
+#actor{position:fixed;bottom:0;left:0;width:165px;aspect-ratio:1/1;max-width:100vw;pointer-events:none;transform-origin:bottom center}
 #actor.right{left:auto;right:0}
-#verityImg{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none}
+.verityFrame{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:contain;opacity:0;visibility:hidden;user-select:none;-webkit-user-drag:none}
+.verityFrame.active{opacity:1;visibility:visible}
 #actor.talking{animation:talkBounce .44s cubic-bezier(.35,.05,.2,1) infinite}
 @keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-4px) scale(1.01)}72%{transform:translateY(-1px) scale(.997)}}
 </style></head><body>
-<div id="actor"><img id="verityImg" src="/verity-image/idle-v5.webp" alt="Mini Verity"></div>
+<div id="actor">
+<img class="verityFrame active" data-frame="normal" src="/verity-image/idle-v5.webp" alt="Mini Verity">
+<img class="verityFrame" data-frame="mid" src="/verity-image/mid-v5.webp" alt="">
+<img class="verityFrame" data-frame="open" src="/verity-image/open-v5.webp" alt="">
+<img class="verityFrame" data-frame="blink" src="/verity-image/blink-v5.webp" alt="">
+<img class="verityFrame" data-frame="talkblink" src="/verity-image/talkblink-v5.webp" alt="">
+<img class="verityFrame" data-frame="grin" src="/verity-image/grin-v2.webp" alt="">
+<img class="verityFrame" data-frame="crazy" src="/verity-image/crazy-v2.webp" alt="">
+</div>
 <audio id="verityAudio" playsinline preload="auto"></audio>
 <script>
 const actor=document.getElementById('actor');
-const img=document.getElementById('verityImg');
 const audio=document.getElementById('verityAudio');
+const frameNodes=[...document.querySelectorAll('.verityFrame')];
+const frames={};
+for(const el of frameNodes)frames[el.dataset.frame]=el;
+frames.closed=frames.normal;
 let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
-let reactionUntil=0,reactionMood='normal',lastSrc='';
+let reactionUntil=0,reactionMood='normal',lastFrame='normal';
 let queue=[],current=null,jsBlocks=0,pausedByJs=false;
 let speaking=false,demoUntil=0;
 let nextBlink=Date.now()+1800+Math.random()*2200,blinkUntil=0;
 
-const srcs={
- normal:'/verity-image/idle-v5.webp',
- closed:'/verity-image/idle-v5.webp',
- mid:'/verity-image/mid-v5.webp',
- open:'/verity-image/open-v5.webp',
- blink:'/verity-image/blink-v5.webp',
- talkblink:'/verity-image/talkblink-v5.webp',
- grin:'/verity-image/grin-v2.webp',
- crazy:'/verity-image/crazy-v2.webp'
-};
+for(const el of frameNodes){
+ try{if(el.decode)el.decode().catch(()=>{});}catch{}
+}
 function safeMood(m){return ['normal','grin','crazy'].includes(m)?m:'normal';}
 function update(s){
  if(!s)return;
@@ -67,9 +72,11 @@ function update(s){
  render();
 }
 function setImage(name){
- const next=srcs[name]||srcs.normal;
- if(next===lastSrc)return;
- lastSrc=next;img.src=next;
+ const key=frames[name]?name:'normal';
+ if(key===lastFrame)return;
+ for(const el of frameNodes)el.classList.remove('active');
+ (frames[key]||frames.normal).classList.add('active');
+ lastFrame=key;
 }
 function detectMood(m){
  const text=String((m&&m.spoken_text)||(m&&m.text)||(m&&m.comment)||'').toLowerCase();
@@ -79,13 +86,13 @@ function detectMood(m){
 }
 function isBlinking(now){
  if(now>=nextBlink){
-   blinkUntil=now+150;
-   nextBlink=now+2800+Math.random()*3000;
+   blinkUntil=now+220;
+   nextBlink=now+2600+Math.random()*2800;
  }
  return now<blinkUntil;
 }
 function mouthFrame(now){
- const n=Math.floor(now/135)%5;
+ const n=Math.floor(now/150)%5;
  return n===0||n===4?'closed':n===2?'open':'mid';
 }
 function render(){
@@ -263,7 +270,7 @@ document.getElementById('left').onclick=()=>send('side',{side:'left'});
 document.getElementById('right').onclick=()=>send('side',{side:'right'});
 size.oninput=()=>document.getElementById('label').textContent=size.value+'px';
 size.onchange=()=>send('size',{size:Number(size.value)});
-document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/verity');
+document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/verity?v=6');
 fetch('/api/verity/state').then(r=>r.json()).then(paint).catch(()=>{});
 new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='verity_avatar_state')paint(m)}catch{}};
 </script></body></html>`;}
