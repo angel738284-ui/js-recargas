@@ -2071,8 +2071,8 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
   <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
   <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
-  <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a la fuente /comments.</div>
-  <button id="copyCommentsUrl">📋 Copiar URL de Verity para PRISM</button>
+  <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a /verity, que ahora incluye imagen + voz.</div>
+  <button id="copyCommentsUrl">📋 Copiar Verity imagen + voz para PRISM</button>
   <input id="commentsUrl" readonly>
   <div class="row">
     <button id="openVerity">🎭 Control Mini Verity</button>
@@ -2133,7 +2133,7 @@ const tiktokStatus=document.getElementById('tiktokStatus');
 const tiktokStats=document.getElementById('tiktokStats');
 const lastLive=document.getElementById('lastLive');
 let liveState=null;
-commentsUrl.value=location.origin+'/comments';
+commentsUrl.value=location.origin+'/verity';
 verityUrl.value=location.origin+'/verity';
 chatUrl.value=location.origin+'/chat';
 
@@ -2141,7 +2141,7 @@ openVerity.onclick=()=>{location.href='/verity-control?key='+encodeURIComponent(
 copyVerityUrl.onclick=async()=>{
   try{
     await navigator.clipboard.writeText(verityUrl.value);
-    readerTestStatus.textContent='✅ URL de Mini Verity copiada. Agregala como otra Fuente web en PRISM.';
+    readerTestStatus.textContent='✅ URL de Verity copiada. Esta única fuente lleva imagen + voz en PRISM.';
   }catch{
     verityUrl.focus();verityUrl.select();
     readerTestStatus.textContent='Seleccioná y copiá la URL de Mini Verity.';
@@ -2302,7 +2302,7 @@ testReader.onclick=async()=>{
     const j=await api('/api/tiktok/reader/test',{});
     await playLocalVerity(j.audio_url);
     tiktokStatus.textContent='✅ Verity sonando';
-    readerTestStatus.textContent='✅ La escuchaste en este celular y también se envió a /comments.';
+    readerTestStatus.textContent='✅ La escuchaste en este celular y también se envió a /verity (imagen + voz).';
     await refreshTikTok();
   }catch(e){
     tiktokStatus.textContent='🔴 Verity: '+String(e.message||e);
