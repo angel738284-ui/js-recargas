@@ -24,19 +24,19 @@ html,body{background:transparent!important;margin:0;width:100%;height:100%;overf
 #face{display:block;width:100%;height:auto}
 @keyframes breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-3px) scale(1.012)}}
 </style></head><body>
-<div id="actor"><canvas id="face" width="224" height="224"></canvas></div>
+<div id="actor"><canvas id="face" width="512" height="512"></canvas></div>
 <script>
 const actor=document.getElementById('actor');
 const canvas=document.getElementById('face');
 const ctx=canvas.getContext('2d',{alpha:true});
-const atlas=new Image();atlas.src='/avatar-image.webp';
+const atlas=new Image();atlas.src='/avatar-image.webp?v=hd2';
 let state={visible:true,mood:'normal',side:'right',size:220};
 let talkingAt=0,talkingUntil=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500,speechId=0;
 const patches={
- talk1:{s:[0,224,47,28],d:[101,67,47,28]},
- talk2:{s:[49,224,47,28],d:[101,67,47,28]},
- blink:{s:[98,224,65,33],d:[99,38,65,33]},
- smirk:{s:[165,224,47,28],d:[101,67,47,28]}
+ talk1:{s:[0,512,110,63],d:[238,157,110,63]},
+ talk2:{s:[114,512,110,63],d:[238,157,110,63]},
+ blink:{s:[228,512,152,60],d:[220,88,152,60]},
+ smirk:{s:[384,512,110,63],d:[238,157,110,63]}
 };
 function update(s){
  if(!s)return;state={...state,...s};
@@ -47,8 +47,8 @@ function update(s){
 }
 function frame(name){
  if(!atlas.complete||!atlas.naturalWidth||name===lastFrame)return;
- lastFrame=name;ctx.clearRect(0,0,224,224);
- ctx.drawImage(atlas,0,0,224,224,0,0,224,224);
+ lastFrame=name;ctx.clearRect(0,0,512,512);
+ ctx.drawImage(atlas,0,0,512,512,0,0,512,512);
  if(patches[name]){
    const p=patches[name],s=p.s,d=p.d;
    ctx.drawImage(atlas,s[0],s[1],s[2],s[3],d[0],d[1],d[2],d[3]);
