@@ -4,10 +4,10 @@ const path = require('path');
 
 module.exports = function createVerityAvatar({broadcast, controllerKey, isAuthorized, readJson}) {
   const assets = {
-    normal: path.join(__dirname, 'verity-normal.webp'),
-    talk: path.join(__dirname, 'verity-talk.webp'),
-    grin: path.join(__dirname, 'verity-grin.webp'),
-    crazy: path.join(__dirname, 'verity-crazy.webp')
+    'normal-v2': path.join(__dirname, 'verity-normal-v2.webp'),
+    'talk-v2': path.join(__dirname, 'verity-talk-v2.webp'),
+    'grin-v2': path.join(__dirname, 'verity-grin-v2.webp'),
+    'crazy-v2': path.join(__dirname, 'verity-crazy-v2.webp')
   };
   const state = {visible:true, mood:'normal', autoMood:true, side:'left', size:165};
   const snapshot = () => ({...state});
@@ -32,7 +32,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 #actor.talking{animation:talkBounce .42s cubic-bezier(.35,.05,.2,1) infinite}
 @keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-7px) scale(1.015)}72%{transform:translateY(-2px) scale(.995)}}
 </style></head><body>
-<div id="actor"><img id="verityImg" src="/verity-image/normal.webp" alt="Mini Verity"></div>
+<div id="actor"><img id="verityImg" src="/verity-image/normal-v2.webp" alt="Mini Verity"></div>
 <script>
 const actor=document.getElementById('actor');
 const img=document.getElementById('verityImg');
@@ -40,10 +40,10 @@ let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
 let talkingUntil=0,reactionUntil=0,reactionMood='normal',speechId=0,lastSrc='';
 
 const srcs={
- normal:'/verity-image/normal.webp',
- talk:'/verity-image/talk.webp',
- grin:'/verity-image/grin.webp',
- crazy:'/verity-image/crazy.webp'
+ normal:'/verity-image/normal-v2.webp',
+ talk:'/verity-image/talk-v2.webp',
+ grin:'/verity-image/grin-v2.webp',
+ crazy:'/verity-image/crazy-v2.webp'
 };
 function safeMood(m){return ['normal','grin','crazy'].includes(m)?m:'normal';}
 function update(s){
