@@ -55,6 +55,7 @@ const atlas=new Image();atlas.src='/avatar-image.webp?v=hd2';
 let state={visible:true,mood:'normal',side:'right',size:220};
 let talkingAt=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500;
 let speaking=false,demoUntil=0,audioQueue=[],currentAudio=null;
+let humanMode=false,humanLevel=0,humanUntil=0,pausedForHuman=false;
 const giftQueue=[];let giftBusy=false;
 const patches={
  talk1:{s:[0,512,110,63],d:[238,157,110,63]},
@@ -82,7 +83,11 @@ function frame(name){
 }
 function tick(){
  const now=Date.now();
- if(speaking||now<demoUntil){
+ const humanTalking=humanMode&&now<humanUntil&&humanLevel>0.08;
+ if(humanTalking){
+   talkingAt=now;
+   frame(humanLevel>0.48?'talk2':humanLevel>0.18?'talk1':'idle');
+ }else if(speaking||now<demoUntil){
    if(!talkingAt)talkingAt=now;
    const n=Math.floor((now-talkingAt)/180)%4;
    frame(n===0?'talk1':n===1?'talk2':n===2?'talk1':'idle');
@@ -95,7 +100,7 @@ function tick(){
 atlas.onload=()=>{lastFrame='';tick();};
 setInterval(tick,120);
 async function playNextAudio(){
- if(currentAudio||!audioQueue.length)return;
+ if(currentAudio||humanMode||!audioQueue.length)return;
  currentAudio=audioQueue.shift();
  audio.onended=null;
  audio.onerror=null;
@@ -129,6 +134,31 @@ function voice(m){
  if(audioQueue.length>20)audioQueue.splice(0,audioQueue.length-20);
  playNextAudio();
 }
+function humanTalk(m){
+ const active=Boolean(m&&m.active);
+ if(active){
+   humanMode=true;
+   humanLevel=Math.max(0,Math.min(1,Number(m.level)||0));
+   humanUntil=Date.now()+350;
+   if(currentAudio&&!audio.paused&&!pausedForHuman){
+     pausedForHuman=true;
+     speaking=false;
+     try{audio.pause();}catch{}
+   }
+   return;
+ }
+ humanMode=false;
+ humanLevel=0;
+ humanUntil=0;
+ if(currentAudio&&pausedForHuman){
+   pausedForHuman=false;
+   speaking=true;
+   talkingAt=Date.now();
+   audio.play().catch(()=>{speaking=false;});
+ }else{
+   playNextAudio();
+ }
+}
 function cleanGiftName(v){return String(v||'Regalo').replace(/[<>]/g,'').trim().slice(0,40)||'Regalo';}
 function cleanGiftUser(v){return String(v||'Alguien').replace(/^@/,'').replace(/[<>]/g,'').trim().slice(0,32)||'Alguien';}
 function enqueueGift(m){giftQueue.push(m||{});if(giftQueue.length>12)giftQueue.splice(0,giftQueue.length-12);runGiftQueue();}
@@ -160,12 +190,13 @@ events.onmessage=(e)=>{
    const m=JSON.parse(e.data);
    if(m.type==='avatar_state')update(m);
    else if(m.type==='avatar_demo'){demoUntil=Date.now()+5000;}
+   else if(m.type==='human_talk')humanTalk(m);
    else if(m.type==='tiktok_gift')enqueueGift(m);
    else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
  }catch{}
 };
 document.body.addEventListener('pointerdown',()=>{
- if(currentAudio&&audio.paused){
+ if(currentAudio&&audio.paused&&!humanMode){
    speaking=true;
    talkingAt=Date.now();
    audio.play().catch(()=>{});
@@ -250,8 +281,9 @@ new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.typ
         else if(action==='mood')state.mood=body.mood==='smirk'?'smirk':'normal';
         else if(action==='demo')broadcast({type:'avatar_demo',at:Date.now()});
         else if(action==='gift-demo')broadcast({type:'tiktok_gift',username:'prueba_js',displayName:'Prueba JS',giftName:'Rosa',repeatCount:1,giftPictureUrl:'',giftId:'demo-rose',test:true,at:Date.now()});
+        else if(action==='human-talk')broadcast({type:'human_talk',active:Boolean(body.active),level:Math.max(0,Math.min(1,Number(body.level)||0)),at:Date.now()});
         else{write(res,400,{ok:false,error:'unknown_action'});return true;}
-        if(action!=='demo'&&action!=='gift-demo')publish();write(res,200,{ok:true,...snapshot()});
+        if(action!=='demo'&&action!=='gift-demo'&&action!=='human-talk')publish();write(res,200,{ok:true,...snapshot()});
       }catch(e){write(res,400,{ok:false,error:String(e.message||e)});}
       return true;
     }
