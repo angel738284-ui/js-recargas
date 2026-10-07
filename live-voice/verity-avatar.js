@@ -57,6 +57,7 @@ let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
 let reactionUntil=0,reactionMood='normal',lastFrame='normal';
 let queue=[],current=null,jsBlocks=0,pausedByJs=false;
 let speaking=false,demoUntil=0;
+let humanMode=false,pausedByHuman=false;
 let nextBlink=Date.now()+1800+Math.random()*2200,blinkUntil=0;
 
 for(const el of frameNodes){
@@ -117,7 +118,7 @@ function finishComment(showReaction=true){
  if(finished||queue.length)setTimeout(playNext,20);
 }
 async function playNext(){
- if(current||jsBlocks>0||!queue.length)return;
+ if(current||jsBlocks>0||humanMode||!queue.length)return;
  current=queue.shift();
  reactionMood=detectMood(current);
  audio.onended=null;
@@ -141,7 +142,7 @@ async function playNext(){
 }
 function releaseJsBlock(){
  jsBlocks=Math.max(0,jsBlocks-1);
- if(jsBlocks>0)return;
+ if(jsBlocks>0||humanMode)return;
  if(current&&pausedByJs){
    pausedByJs=false;
    speaking=true;
@@ -186,6 +187,30 @@ function enqueueComment(msg){
  queue.push(msg);
  playNext();
 }
+function humanTalk(msg){
+ const active=Boolean(msg&&msg.active);
+ if(active){
+   humanMode=true;
+   if(current&&!audio.paused&&!pausedByHuman){
+     pausedByHuman=true;
+     speaking=false;
+     try{audio.pause();}catch{}
+     render();
+   }
+   return;
+ }
+ const was=humanMode;
+ humanMode=false;
+ if(!was)return;
+ if(current&&pausedByHuman&&jsBlocks===0){
+   pausedByHuman=false;
+   speaking=true;
+   render();
+   audio.play().catch(()=>{speaking=false;render();});
+ }else if(!current){
+   playNext();
+ }
+}
 setInterval(render,80);
 
 const events=new EventSource('/events');
@@ -193,6 +218,7 @@ events.onmessage=e=>{
  try{
    const m=JSON.parse(e.data);
    if(m.type==='verity_avatar_state')update(m);
+   else if(m.type==='human_talk')humanTalk(m);
    else if(m.type==='verity_demo'){
      const now=Date.now();
      reactionMood=safeMood(m.mood||state.mood);
@@ -207,7 +233,7 @@ events.onmessage=e=>{
 };
 
 document.body.addEventListener('pointerdown',()=>{
- if(current&&audio.paused&&jsBlocks===0){
+ if(current&&audio.paused&&jsBlocks===0&&!humanMode){
    speaking=true;render();audio.play().catch(()=>{});
  }
 },{once:true});
