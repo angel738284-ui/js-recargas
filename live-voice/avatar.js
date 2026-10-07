@@ -41,8 +41,10 @@ html,body{background:transparent!important;margin:0;width:100%;height:100%;overf
 <div id="actor"><canvas id="face" width="512" height="512"></canvas></div>
 <div id="giftFx" aria-hidden="true"><img id="giftIcon" alt=""><span id="giftEmoji">🌹</span></div>
 <div id="giftNote" aria-live="polite"></div>
+<audio id="jsAudio" playsinline preload="auto"></audio>
 <script>
 const actor=document.getElementById('actor');
+const audio=document.getElementById('jsAudio');
 const giftFx=document.getElementById('giftFx');
 const giftIcon=document.getElementById('giftIcon');
 const giftEmoji=document.getElementById('giftEmoji');
@@ -51,7 +53,8 @@ const canvas=document.getElementById('face');
 const ctx=canvas.getContext('2d',{alpha:true});
 const atlas=new Image();atlas.src='/avatar-image.webp?v=hd2';
 let state={visible:true,mood:'normal',side:'right',size:220};
-let talkingAt=0,talkingUntil=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500,speechId=0;
+let talkingAt=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500;
+let speaking=false,demoUntil=0,audioQueue=[],currentAudio=null;
 const giftQueue=[];let giftBusy=false;
 const patches={
  talk1:{s:[0,512,110,63],d:[238,157,110,63]},
@@ -79,27 +82,52 @@ function frame(name){
 }
 function tick(){
  const now=Date.now();
- if(now>=talkingAt&&now<talkingUntil){
+ if(speaking||now<demoUntil){
+   if(!talkingAt)talkingAt=now;
    const n=Math.floor((now-talkingAt)/180)%4;
    frame(n===0?'talk1':n===1?'talk2':n===2?'talk1':'idle');
  } else {
+   talkingAt=0;
    if(now>nextBlink){blinkAt=now;nextBlink=now+3300+Math.random()*2300;}
    frame(now-blinkAt<180?'blink':state.mood==='smirk'?'smirk':'idle');
  }
 }
 atlas.onload=()=>{lastFrame='';tick();};
 setInterval(tick,120);
+async function playNextAudio(){
+ if(currentAudio||!audioQueue.length)return;
+ currentAudio=audioQueue.shift();
+ audio.onended=null;
+ audio.onerror=null;
+ audio.src=currentAudio.url;
+ audio.muted=false;
+ speaking=true;
+ talkingAt=Date.now();
+ try{
+   await audio.play();
+   audio.onended=()=>{
+     speaking=false;
+     currentAudio=null;
+     playNextAudio();
+   };
+   audio.onerror=()=>{
+     speaking=false;
+     currentAudio=null;
+     playNextAudio();
+   };
+ }catch{
+   const failed=currentAudio;
+   currentAudio=null;
+   speaking=false;
+   if(failed)audioQueue.unshift(failed);
+   setTimeout(playNextAudio,800);
+ }
+}
 function voice(m){
- const now=Date.now(), id=++speechId;
- const txt=String(m.text||'');
- talkingAt=now+170;
- talkingUntil=now+Math.max(1300,Math.min(24000,Math.round(txt.length*88)+750));
- const probe=new Audio();probe.preload='metadata';
- probe.onloadedmetadata=()=>{
-   if(id!==speechId||!Number.isFinite(probe.duration)||probe.duration<=0)return;
-   talkingUntil=Math.max(talkingAt+500,now+Math.min(60000,probe.duration*1000+500));
- };
- probe.src=m.url;
+ if(!m||!m.url)return;
+ audioQueue.push(m);
+ if(audioQueue.length>20)audioQueue.splice(0,audioQueue.length-20);
+ playNextAudio();
 }
 function cleanGiftName(v){return String(v||'Regalo').replace(/[<>]/g,'').trim().slice(0,40)||'Regalo';}
 function cleanGiftUser(v){return String(v||'Alguien').replace(/^@/,'').replace(/[<>]/g,'').trim().slice(0,32)||'Alguien';}
@@ -131,11 +159,20 @@ events.onmessage=(e)=>{
  try{
    const m=JSON.parse(e.data);
    if(m.type==='avatar_state')update(m);
-   else if(m.type==='avatar_demo'){talkingAt=Date.now();talkingUntil=talkingAt+5000;}
+   else if(m.type==='avatar_demo'){demoUntil=Date.now()+5000;}
    else if(m.type==='tiktok_gift')enqueueGift(m);
    else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
  }catch{}
 };
+document.body.addEventListener('pointerdown',()=>{
+ if(currentAudio&&audio.paused){
+   speaking=true;
+   talkingAt=Date.now();
+   audio.play().catch(()=>{});
+ }
+},{once:true});
+setInterval(()=>fetch('/keepalive',{cache:'no-store'}).catch(()=>{}),120000);
+fetch('/keepalive',{cache:'no-store'}).catch(()=>{});
 fetch('/api/avatar/state',{cache:'no-store'}).then(r=>r.json()).then(update).catch(()=>{});
 </script></body></html>`;}
 
@@ -160,7 +197,7 @@ iframe{border:0;width:100%;height:100%}#status{color:#9eedae;font-size:14px}
 <div class="row"><button id="smirk">😏 Sarcástico</button><button id="left">⬅️ Izquierda</button></div>
 <button style="width:100%;margin-top:8px" id="right">➡️ Poner a la derecha</button>
 <p>Tamaño: <b id="label">220px</b></p><input id="size" type="range" min="110" max="360" step="10" value="220">
-<p>En PRISM agregá la fuente web <b>https://js-live-voice.onrender.com/avatar</b>. Es visual: la voz sigue saliendo por /prism.</p>
+<p>En PRISM usá una sola fuente: <b>https://js-live-voice.onrender.com/avatar</b>. Ahora incluye el avatar 2D + la voz principal JS.</p>
 <button style="width:100%" id="copy">Copiar URL para PRISM</button>
 </div>
 <script>
