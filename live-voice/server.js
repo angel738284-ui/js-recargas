@@ -1756,9 +1756,10 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <a class="link" href="/mini-js-control?key=${encodeURIComponent(key)}">💬 TikTok + Verity</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
-  <div class="small">AUTO clona tu voz como siempre. “Hablar normal” usa tu micrófono solo para mover la boca de JS y pausa las voces automáticas; tu voz real sale por el micrófono de PRISM.</div>
+  <div class="small">AUTO clona tu voz como siempre. “Hablar normal” manda tu voz real desde este celular a /avatar en PRISM, mueve la boca de JS y pausa las voces automáticas. Para escucharte también en este celular, activá “Escuchar” (mejor con auriculares para evitar eco).</div>
 </div>
 <audio id="audio" playsinline></audio>
+<audio id="humanMonitor" playsinline></audio>
 <script>
 const KEY=${JSON.stringify(key)};
 const startBtn=document.getElementById('start');
@@ -1768,6 +1769,7 @@ const humanTalkBtn=document.getElementById('humanTalk');
 const statusEl=document.getElementById('status');
 const heardEl=document.getElementById('heard');
 const audio=document.getElementById('audio');
+const humanMonitor=document.getElementById('humanMonitor');
 
 let stream=null;
 let ctx=null;
@@ -1790,10 +1792,21 @@ let humanRaf=0;
 let humanLastSent=0;
 let humanNoise=0.006;
 let humanCalibratingUntil=0;
+let humanCurrentLevel=0;
+let micSource=null;
+let captureNode=null;
+let captureSink=null;
+let humanPcmQueue=[];
 
 monitorBtn.onclick=()=>{
   monitorLocal=!monitorLocal;
   audio.muted=!monitorLocal;
+  humanMonitor.muted=!monitorLocal;
+  if(humanMode&&stream){
+    humanMonitor.srcObject=stream;
+    if(monitorLocal)humanMonitor.play().catch(()=>{});
+    else humanMonitor.pause();
+  }
   monitorBtn.textContent=monitorLocal
     ? '🔊 Escuchar en este celular: ON'
     : '🔇 Escuchar en este celular: OFF';
@@ -1958,11 +1971,11 @@ async function ensureMic(){
   }
   ctx=new (window.AudioContext||window.webkitAudioContext)();
   await ctx.resume();
-  const source=ctx.createMediaStreamSource(stream);
+  micSource=ctx.createMediaStreamSource(stream);
   analyser=ctx.createAnalyser();
   analyser.fftSize=1024;
   analyser.smoothingTimeConstant=0.15;
-  source.connect(analyser);
+  micSource.connect(analyser);
   dataArray=new Uint8Array(analyser.fftSize);
   return true;
 }
@@ -1975,6 +1988,15 @@ function closeMic(){
   if(ctx){
     try{ctx.close();}catch{}
   }
+  try{if(captureNode)captureNode.disconnect();}catch{}
+  try{if(captureSink)captureSink.disconnect();}catch{}
+  try{if(micSource)micSource.disconnect();}catch{}
+  captureNode=null;
+  captureSink=null;
+  micSource=null;
+  humanPcmQueue=[];
+  humanMonitor.pause();
+  try{humanMonitor.srcObject=null;}catch{}
   ctx=null;
   analyser=null;
   dataArray=null;
@@ -2019,6 +2041,65 @@ function sendHumanTalk(active,level,keepalive=false){
   }).catch(()=>{});
 }
 
+function downsample16k(input,inputRate){
+  const ratio=inputRate/16000;
+  const outLen=Math.max(1,Math.floor(input.length/ratio));
+  const out=new Int16Array(outLen);
+  for(let i=0;i<outLen;i++){
+    const start=Math.floor(i*ratio);
+    const end=Math.min(input.length,Math.max(start+1,Math.floor((i+1)*ratio)));
+    let sum=0;
+    for(let j=start;j<end;j++)sum+=input[j];
+    let v=sum/Math.max(1,end-start);
+    v=Math.max(-1,Math.min(1,v));
+    out[i]=v<0?Math.round(v*32768):Math.round(v*32767);
+  }
+  return out;
+}
+
+function flushHumanPcm(){
+  const packetSamples=3200;
+  while(humanPcmQueue.length>=packetSamples){
+    const arr=new Int16Array(packetSamples);
+    for(let i=0;i<packetSamples;i++)arr[i]=humanPcmQueue[i];
+    humanPcmQueue.splice(0,packetSamples);
+    fetch('/api/avatar/human-audio',{
+      method:'POST',
+      headers:{
+        'content-type':'application/octet-stream',
+        'authorization':'Bearer '+KEY,
+        'x-human-level':String(humanCurrentLevel||0)
+      },
+      body:arr.buffer
+    }).catch(()=>{});
+  }
+}
+
+function startHumanCapture(){
+  if(!ctx||!micSource||captureNode)return;
+  humanPcmQueue=[];
+  captureNode=ctx.createScriptProcessor(2048,1,1);
+  captureSink=ctx.createGain();
+  captureSink.gain.value=0;
+  captureNode.onaudioprocess=e=>{
+    if(!humanMode)return;
+    const pcm=downsample16k(e.inputBuffer.getChannelData(0),ctx.sampleRate||48000);
+    for(let i=0;i<pcm.length;i++)humanPcmQueue.push(pcm[i]);
+    flushHumanPcm();
+  };
+  micSource.connect(captureNode);
+  captureNode.connect(captureSink);
+  captureSink.connect(ctx.destination);
+}
+
+function stopHumanCapture(){
+  try{if(captureNode)captureNode.disconnect();}catch{}
+  try{if(captureSink)captureSink.disconnect();}catch{}
+  captureNode=null;
+  captureSink=null;
+  humanPcmQueue=[];
+}
+
 function humanLoop(){
   if(!humanMode||!analyser)return;
   const now=Date.now();
@@ -2036,13 +2117,13 @@ function humanLoop(){
     ? 0
     : (rms<=gate?0:Math.min(1,0.12+(rms-gate)/0.075));
 
-  if(now-humanLastSent>=140){
+  humanCurrentLevel=level;
+  if(now-humanLastSent>=180){
     humanLastSent=now;
-    sendHumanTalk(true,level);
     statusEl.textContent=now<humanCalibratingUntil
       ? '🎙️ Calibrando Hablar normal…'
       : level>0.08
-        ? '🗣️ Hablando vos · JS te sigue'
+        ? '🗣️ Hablando vos · voz enviada a PRISM'
         : '🎙️ Hablar normal activo · JS esperando tu voz';
   }
   humanRaf=requestAnimationFrame(humanLoop);
@@ -2057,11 +2138,16 @@ async function startHumanTalk(){
 
   humanMode=true;
   humanNoise=0.006;
+  humanCurrentLevel=0;
   humanCalibratingUntil=Date.now()+650;
   humanLastSent=0;
+  humanMonitor.srcObject=stream;
+  humanMonitor.muted=!monitorLocal;
+  if(monitorLocal)humanMonitor.play().catch(()=>{});
+  startHumanCapture();
   humanTalkBtn.classList.add('on');
   humanTalkBtn.textContent='🎙️ Hablar normal: ON';
-  heardEl.textContent='Tu voz real sale por el micrófono de PRISM. JS mueve la boca con este micrófono.';
+  heardEl.textContent='Tu voz real se está enviando a /avatar en PRISM. Activá “Escuchar” si querés oírla también en este celular.';
   sendHumanTalk(true,0);
   humanLoop();
 }
@@ -2071,6 +2157,10 @@ function stopHumanTalk(){
   humanMode=false;
   if(humanRaf)cancelAnimationFrame(humanRaf);
   humanRaf=0;
+  humanCurrentLevel=0;
+  stopHumanCapture();
+  humanMonitor.pause();
+  try{humanMonitor.srcObject=null;}catch{}
   sendHumanTalk(false,0,true);
   humanTalkBtn.classList.remove('on');
   humanTalkBtn.textContent='🎙️ Hablar normal: OFF';
@@ -2511,7 +2601,8 @@ const jsAvatar = require('./avatar')({
   broadcast,
   controllerKey: CONTROLLER_KEY,
   isAuthorized: isControllerAuthorized,
-  readJson
+  readJson,
+  readBuffer
 });
 
 const verityAvatar = require('./verity-avatar')({
