@@ -12,6 +12,8 @@ const CONTROLLER_KEY = String(process.env.CONTROLLER_KEY || '');
 const VOICE_MCP = 'https://media-pipeline-8suq.onrender.com/mcp';
 const FISH_API_KEY = String(process.env.FISH_API_KEY || '');
 const FISH_REFERENCE_ID = String(process.env.FISH_REFERENCE_ID || 'f79707580f1f4574bb3668d16936b897');
+const FISH_COMMENT_API_KEY = String(process.env.FISH_COMMENT_API_KEY || '');
+const FISH_COMMENT_REFERENCE_ID = String(process.env.FISH_COMMENT_REFERENCE_ID || '37e676afb08d4ba1a5c439b9af0fa6cd');
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '');
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.8-flash');
 const KIE_API_KEY = String(process.env.KIE_API_KEY || '');
@@ -44,12 +46,21 @@ let tiktokState = {
   replied: 0,
   lastComment: null,
   lastReply: null,
-  error: null
+  error: null,
+  readerEnabled: false,
+  readerIncludeName: true,
+  readerConfigured: Boolean(FISH_COMMENT_API_KEY),
+  readerQueued: 0,
+  readerRead: 0,
+  readerLastRead: null,
+  readerError: null
 };
 let tiktokMiniBusy = false;
+let tiktokReadBusy = false;
 let lastTikTokReplyAt = 0;
 const tiktokSeen = new Map();
 const tiktokUserLastReply = new Map();
+const tiktokReadQueue = [];
 
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -704,10 +715,114 @@ function tikTokReplyCooldownMs() {
   return 12000;
 }
 
+function cleanTikTokReaderText(value) {
+  return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
+}
+
+function tikTokReaderSpeech(item) {
+  const text = cleanTikTokReaderText(item.comment);
+  if (!tiktokState.readerIncludeName) return text;
+  const rawName = String(item.displayName || item.username || '')
+    .replace(/^@/, '')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .slice(0, 50);
+  return rawName ? rawName + ' dice: ' + text : text;
+}
+
+async function makeCommentVoice(text) {
+  if (!FISH_COMMENT_API_KEY) throw new Error('fish_comment_api_key_missing');
+  const r = await fetch('https://api.fish.audio/v1/tts', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + FISH_COMMENT_API_KEY,
+      'Content-Type': 'application/json',
+      'model': 's2.1-pro-free'
+    },
+    body: JSON.stringify({
+      text,
+      reference_id: FISH_COMMENT_REFERENCE_ID,
+      format: 'mp3'
+    }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!r.ok) throw new Error('fish_comment_http_' + r.status + ': ' + (await r.text()).slice(0, 180));
+  const buf = Buffer.from(await r.arrayBuffer());
+  const id = 'comment-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  generatedAudio.set(id, { buf, expires: Date.now() + 10 * 60 * 1000 });
+  return '/audio/' + id + '.mp3';
+}
+
+async function drainTikTokReadQueue() {
+  if (tiktokReadBusy) return;
+  tiktokReadBusy = true;
+  try {
+    while (tiktokState.readerEnabled && tiktokReadQueue.length) {
+      const item = tiktokReadQueue.shift();
+      tiktokState.readerQueued = tiktokReadQueue.length;
+      try {
+        const speechText = tikTokReaderSpeech(item);
+        if (!speechText) continue;
+        const audioUrl = await makeCommentVoice(speechText);
+        const at = Date.now();
+        tiktokState.readerRead += 1;
+        tiktokState.readerLastRead = { ...item, speechText, at };
+        tiktokState.readerError = null;
+        broadcast({
+          type: 'audio',
+          url: audioUrl,
+          text: item.comment,
+          spoken_text: speechText,
+          source: 'tiktok-comment-reader',
+          voice: 'verity',
+          username: item.username,
+          displayName: item.displayName,
+          comment: item.comment,
+          at
+        });
+        broadcast({
+          type: 'tiktok_reader_read',
+          username: item.username,
+          displayName: item.displayName,
+          comment: item.comment,
+          queued: tiktokReadQueue.length,
+          read: tiktokState.readerRead,
+          at
+        });
+      } catch (e) {
+        tiktokState.readerError = String(e?.message || e).slice(0, 240);
+        broadcast({ type: 'tiktok_reader_error', error: tiktokState.readerError, at: Date.now() });
+        if (/fish_comment_http_(401|403)|fish_comment_api_key_missing/.test(tiktokState.readerError)) {
+          tiktokState.readerEnabled = false;
+          tiktokReadQueue.length = 0;
+          tiktokState.readerQueued = 0;
+        }
+      }
+    }
+  } finally {
+    tiktokReadBusy = false;
+  }
+}
+
+function enqueueTikTokRead(comment, username, displayName = '') {
+  if (!tiktokState.readerEnabled) return;
+  const text = cleanTikTokReaderText(comment);
+  if (!text) return;
+  tiktokReadQueue.push({
+    comment: text,
+    username: String(username || '').slice(0, 80),
+    displayName: String(displayName || '').slice(0, 80),
+    at: Date.now()
+  });
+  tiktokState.readerQueued = tiktokReadQueue.length;
+  drainTikTokReadQueue().catch(() => {});
+}
+
 async function processTikTokComment(comment, username, displayName = '') {
   tiktokState.received += 1;
   tiktokState.lastComment = { username, displayName, comment, at: Date.now() };
   broadcast({ type: 'tiktok_comment', username, displayName, comment, at: Date.now() });
+  enqueueTikTokRead(comment, username, displayName);
 
   if (!tiktokState.autoReply) return;
 
@@ -1166,6 +1281,8 @@ let unlocked=false;
 let recognition=null;
 let currentText='';
 let sending=false;
+let audioQueue=[];
+let currentAudioMsg=null;
 
 async function unlockAudio(){
   try{
@@ -1285,21 +1402,81 @@ talkBtn.onpointerleave=(e)=>{if(e.buttons)stopTalking(e);};
 
 document.body.addEventListener('pointerdown',()=>{if(!unlocked)unlockAudio()},{once:true});
 
+function isCommentAudio(msg){
+  return Boolean(msg&&msg.source==='tiktok-comment-reader');
+}
+
+function nextAudioMessage(){
+  if(!audioQueue.length)return null;
+  const mainIndex=audioQueue.findIndex(m=>!isCommentAudio(m));
+  if(mainIndex>=0)return audioQueue.splice(mainIndex,1)[0];
+  return audioQueue.shift();
+}
+
+async function playNextAudio(){
+  if(currentAudioMsg)return;
+  const msg=nextAudioMessage();
+  if(!msg){
+    statusEl.textContent=unlocked?'Voz IA lista':'Conectado · activá audio una vez';
+    return;
+  }
+  currentAudioMsg=msg;
+  try{
+    audio.onended=null;
+    audio.onerror=null;
+    audio.src=msg.url;
+    audio.muted=false;
+    const resumeAt=Number(msg._resumeAt||0);
+    if(resumeAt>0){
+      audio.onloadedmetadata=()=>{
+        try{audio.currentTime=Math.min(resumeAt,Math.max(0,(audio.duration||resumeAt)-0.05));}catch{}
+      };
+    }else{
+      audio.onloadedmetadata=null;
+    }
+    statusEl.textContent=isCommentAudio(msg)?'💬 Verity leyendo comentario…':'🗣️ JS hablando…';
+    await audio.play();
+    audio.onended=()=>{
+      currentAudioMsg=null;
+      playNextAudio();
+    };
+    audio.onerror=()=>{
+      currentAudioMsg=null;
+      playNextAudio();
+    };
+  }catch{
+    currentAudioMsg=null;
+    statusEl.textContent='Audio bloqueado · tocá Activar audio';
+  }
+}
+
+function enqueueAudio(msg){
+  if(!msg||!msg.url)return;
+  if(!isCommentAudio(msg)&&currentAudioMsg&&isCommentAudio(currentAudioMsg)){
+    try{
+      currentAudioMsg._resumeAt=audio.currentTime||0;
+      audio.onended=null;
+      audio.pause();
+    }catch{}
+    audioQueue.unshift(currentAudioMsg);
+    currentAudioMsg=null;
+    audioQueue.unshift(msg);
+    playNextAudio();
+    return;
+  }
+  audioQueue.push(msg);
+  playNextAudio();
+}
+
 const events=new EventSource('/events');
 events.onopen=()=>{
   statusEl.textContent=unlocked ? 'Voz IA lista' : 'Conectado · activá audio una vez';
 };
 events.onerror=()=>{statusEl.textContent='Reconectando…';};
-events.onmessage=async(ev)=>{
+events.onmessage=(ev)=>{
   try{
     const msg=JSON.parse(ev.data);
-    if(msg.type==='audio' && msg.url){
-      audio.src=msg.url;
-      audio.muted=false;
-      await audio.play();
-      statusEl.textContent='Hablando…';
-      audio.onended=()=>{statusEl.textContent='Voz IA lista';};
-    }
+    if(msg.type==='audio' && msg.url)enqueueAudio(msg);
   }catch{
     statusEl.textContent='Audio bloqueado · tocá Activar audio';
   }
@@ -1590,6 +1767,7 @@ events.onmessage=async(ev)=>{
   try{
     const msg=JSON.parse(ev.data);
     if(msg.type==='audio'&&msg.url){
+      if(msg.source==='tiktok-comment-reader')return;
       if(speechActive)finishPhrase();
       busy=true;
       audio.src=msg.url;
@@ -1650,6 +1828,14 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
     <button id="toggleAuto">AUTO respuestas: OFF</button>
     <button id="disconnectTikTok" class="danger">Desconectar</button>
   </div>
+  <div class="row">
+    <button id="toggleReader">🔊 Verity comentarios: OFF</button>
+    <button id="testReader">🎧 Probar Verity</button>
+  </div>
+  <div class="row">
+    <button id="toggleReaderName">👤 Decir nombre: ON</button>
+    <button id="clearReader" class="danger">🧹 Vaciar cola</button>
+  </div>
   <div id="tiktokStatus">TikTok desconectado</div>
   <div id="tiktokStats" class="stats"></div>
   <div id="lastLive">Esperando comentarios…</div>
@@ -1681,6 +1867,10 @@ const mode=document.getElementById('mode');
 const connectTikTok=document.getElementById('connectTikTok');
 const disconnectTikTok=document.getElementById('disconnectTikTok');
 const toggleAuto=document.getElementById('toggleAuto');
+const toggleReader=document.getElementById('toggleReader');
+const toggleReaderName=document.getElementById('toggleReaderName');
+const testReader=document.getElementById('testReader');
+const clearReader=document.getElementById('clearReader');
 const tiktokStatus=document.getElementById('tiktokStatus');
 const tiktokStats=document.getElementById('tiktokStats');
 const lastLive=document.getElementById('lastLive');
@@ -1713,7 +1903,12 @@ function renderTikTok(s){
   if(s.error)tiktokStatus.textContent+=' · '+s.error;
   toggleAuto.textContent='AUTO respuestas: '+(s.autoReply?'ON':'OFF');
   toggleAuto.classList.toggle('on',Boolean(s.autoReply));
-  tiktokStats.textContent='Recibidos: '+(s.received||0)+' · Seleccionados: '+(s.selected||0)+' · Respondidos: '+(s.replied||0);
+  toggleReader.textContent='🔊 Verity comentarios: '+(s.readerEnabled?'ON':'OFF');
+  toggleReader.classList.toggle('on',Boolean(s.readerEnabled));
+  toggleReaderName.textContent='👤 Decir nombre: '+(s.readerIncludeName?'ON':'OFF');
+  toggleReaderName.classList.toggle('on',Boolean(s.readerIncludeName));
+  tiktokStats.textContent='Recibidos: '+(s.received||0)+' · Verity leídos: '+(s.readerRead||0)+' · En cola: '+(s.readerQueued||0)+' · Respuestas JS: '+(s.replied||0);
+  if(s.readerError)tiktokStatus.textContent+=' · Verity: '+s.readerError;
   if(s.lastReply){
     lastLive.textContent=[
       'Última respuesta a @'+s.lastReply.username+':',
@@ -1757,6 +1952,46 @@ toggleAuto.onclick=async()=>{
   const enabled=!(liveState&&liveState.autoReply);
   try{
     renderTikTok(await api('/api/tiktok/auto',{enabled,mode:mode.value}));
+  }catch(e){
+    tiktokStatus.textContent='🔴 '+String(e.message||e);
+  }
+};
+
+toggleReader.onclick=async()=>{
+  const enabled=!(liveState&&liveState.readerEnabled);
+  try{
+    renderTikTok(await api('/api/tiktok/reader',{enabled}));
+  }catch(e){
+    tiktokStatus.textContent='🔴 Verity: '+String(e.message||e);
+  }
+};
+
+toggleReaderName.onclick=async()=>{
+  const includeName=!(liveState&&liveState.readerIncludeName);
+  try{
+    renderTikTok(await api('/api/tiktok/reader',{includeName}));
+  }catch(e){
+    tiktokStatus.textContent='🔴 Verity: '+String(e.message||e);
+  }
+};
+
+testReader.onclick=async()=>{
+  testReader.disabled=true;
+  tiktokStatus.textContent='🎧 Generando prueba de Verity…';
+  try{
+    await api('/api/tiktok/reader/test',{});
+    tiktokStatus.textContent='✅ Prueba de Verity enviada a PRISM';
+    await refreshTikTok();
+  }catch(e){
+    tiktokStatus.textContent='🔴 Verity: '+String(e.message||e);
+  }finally{
+    testReader.disabled=false;
+  }
+};
+
+clearReader.onclick=async()=>{
+  try{
+    renderTikTok(await api('/api/tiktok/reader/clear',{}));
   }catch(e){
     tiktokStatus.textContent='🔴 '+String(e.message||e);
   }
@@ -1819,7 +2054,7 @@ events.onmessage=(ev)=>{
         '→ '+msg.reply
       ].join(String.fromCharCode(10));
       refreshTikTok();
-    }else if(msg.type==='tiktok_status'||msg.type==='tiktok_error'){
+    }else if(msg.type==='tiktok_status'||msg.type==='tiktok_error'||msg.type==='tiktok_reader_read'||msg.type==='tiktok_reader_error'){
       refreshTikTok();
     }
   }catch{}
@@ -1860,13 +2095,17 @@ const server = http.createServer(async (req, res) => {
       voice_mcp: true,
       fish_direct: Boolean(FISH_API_KEY),
       fish_reference_id: FISH_REFERENCE_ID,
+      fish_comment_direct: Boolean(FISH_COMMENT_API_KEY),
+      fish_comment_reference_id: FISH_COMMENT_REFERENCE_ID,
       kie_brain: Boolean(KIE_API_KEY),
       kie_model: KIE_MODEL,
       gemini_brain: Boolean(GEMINI_API_KEY),
       gemini_model: GEMINI_MODEL,
       tiktok_status: tiktokState.status,
       tiktok_username: tiktokState.username,
-      tiktok_auto_reply: tiktokState.autoReply
+      tiktok_auto_reply: tiktokState.autoReply,
+      tiktok_reader_enabled: tiktokState.readerEnabled,
+      tiktok_reader_configured: Boolean(FISH_COMMENT_API_KEY)
     });
   }
 
@@ -2125,6 +2364,52 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e) });
     }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/reader') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const body = await readJson(req);
+      if (body.includeName !== undefined) tiktokState.readerIncludeName = Boolean(body.includeName);
+      if (body.enabled !== undefined) {
+        const enabled = Boolean(body.enabled);
+        if (enabled && !FISH_COMMENT_API_KEY) {
+          tiktokState.readerConfigured = false;
+          return json(res, 400, { ok: false, error: 'fish_comment_api_key_missing', ...tiktokState });
+        }
+        tiktokState.readerEnabled = enabled;
+        if (!enabled) {
+          tiktokReadQueue.length = 0;
+          tiktokState.readerQueued = 0;
+        }
+      }
+      tiktokState.readerConfigured = Boolean(FISH_COMMENT_API_KEY);
+      if (tiktokState.readerEnabled) drainTikTokReadQueue().catch(() => {});
+      return json(res, 200, { ok: true, ...tiktokState, busy: tiktokMiniBusy, readerBusy: tiktokReadBusy });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e), ...tiktokState });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/reader/test') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const speechText = 'Hola, soy Verity. Ya puedo leer los comentarios del directo.';
+      const audioUrl = await makeCommentVoice(speechText);
+      const at = Date.now();
+      broadcast({ type: 'audio', url: audioUrl, text: speechText, spoken_text: speechText, source: 'tiktok-comment-reader', voice: 'verity', at });
+      return json(res, 200, { ok: true, voice: 'verity', configured: Boolean(FISH_COMMENT_API_KEY) });
+    } catch (e) {
+      tiktokState.readerError = String(e?.message || e).slice(0, 240);
+      return json(res, 500, { ok: false, error: tiktokState.readerError, configured: Boolean(FISH_COMMENT_API_KEY) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/reader/clear') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    tiktokReadQueue.length = 0;
+    tiktokState.readerQueued = 0;
+    return json(res, 200, { ok: true, ...tiktokState, readerBusy: tiktokReadBusy });
   }
 
   if (req.method === 'POST' && u.pathname === '/api/tiktok/auto') {
