@@ -1476,11 +1476,130 @@ events.onerror=()=>{statusEl.textContent='Reconectando…';};
 events.onmessage=(ev)=>{
   try{
     const msg=JSON.parse(ev.data);
-    if(msg.type==='audio' && msg.url)enqueueAudio(msg);
+    if(msg.type==='audio' && msg.url && msg.source!=='tiktok-comment-reader')enqueueAudio(msg);
   }catch{
     statusEl.textContent='Audio bloqueado · tocá Activar audio';
   }
 };
+
+setInterval(()=>fetch('/keepalive',{cache:'no-store'}).catch(()=>{}),120000);
+fetch('/keepalive',{cache:'no-store'}).catch(()=>{});
+</script>
+</body>
+</html>`;
+
+const commentsPage = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JS · Verity Comments</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
+#status{display:none}
+</style>
+</head>
+<body>
+<div id="status">Verity lista</div>
+<audio id="verity" playsinline preload="auto"></audio>
+<script>
+const audio=document.getElementById('verity');
+const statusEl=document.getElementById('status');
+let queue=[];
+let current=null;
+let jsBlocks=0;
+let pausedByJs=false;
+
+function isCommentAudio(msg){
+  return Boolean(msg&&msg.source==='tiktok-comment-reader');
+}
+
+function setStatus(t){statusEl.textContent=t;}
+
+async function playNext(){
+  if(current||jsBlocks>0||!queue.length)return;
+  current=queue.shift();
+  audio.onended=null;
+  audio.onerror=null;
+  audio.src=current.url;
+  audio.muted=false;
+  setStatus('Verity leyendo…');
+  try{
+    await audio.play();
+    audio.onended=()=>{current=null;setStatus('Verity lista');playNext();};
+    audio.onerror=()=>{current=null;setStatus('Saltando audio…');playNext();};
+  }catch{
+    const failed=current;
+    current=null;
+    if(failed)queue.unshift(failed);
+    setStatus('Esperando permiso de audio…');
+    setTimeout(playNext,800);
+  }
+}
+
+function releaseJsBlock(){
+  jsBlocks=Math.max(0,jsBlocks-1);
+  if(jsBlocks>0)return;
+  if(current&&pausedByJs){
+    pausedByJs=false;
+    setStatus('Verity continúa…');
+    audio.play().catch(()=>setTimeout(()=>audio.play().catch(()=>{}),500));
+  }else{
+    setStatus('Verity lista');
+    playNext();
+  }
+}
+
+function pauseForJs(msg){
+  jsBlocks+=1;
+  if(current&&!audio.paused){
+    pausedByJs=true;
+    try{audio.pause();}catch{}
+  }
+  setStatus('JS hablando · Verity pausada');
+  const probe=new Audio();
+  probe.muted=true;
+  probe.playsInline=true;
+  probe.preload='auto';
+  probe.src=msg.url;
+  let released=false;
+  let timer=0;
+  const done=()=>{
+    if(released)return;
+    released=true;
+    if(timer)clearTimeout(timer);
+    try{probe.pause();}catch{}
+    releaseJsBlock();
+  };
+  probe.onended=done;
+  probe.onerror=()=>{if(!timer)timer=setTimeout(done,1600);};
+  probe.onloadedmetadata=()=>{
+    if(Number.isFinite(probe.duration)&&probe.duration>0){
+      timer=setTimeout(done,Math.min(65000,probe.duration*1000+500));
+    }
+  };
+  probe.play().catch(()=>{if(!timer)timer=setTimeout(done,5000);});
+}
+
+const events=new EventSource('/events');
+events.onopen=()=>setStatus('Verity lista');
+events.onerror=()=>setStatus('Reconectando…');
+events.onmessage=(ev)=>{
+  try{
+    const msg=JSON.parse(ev.data);
+    if(msg.type!=='audio'||!msg.url)return;
+    if(isCommentAudio(msg)){
+      queue.push(msg);
+      playNext();
+    }else{
+      pauseForJs(msg);
+    }
+  }catch{}
+};
+
+document.body.addEventListener('pointerdown',()=>{
+  if(current&&audio.paused&&jsBlocks===0)audio.play().catch(()=>{});
+},{once:true});
 
 setInterval(()=>fetch('/keepalive',{cache:'no-store'}).catch(()=>{}),120000);
 fetch('/keepalive',{cache:'no-store'}).catch(()=>{});
@@ -1837,6 +1956,12 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
     <button id="toggleReaderName">👤 Decir nombre: ON</button>
     <button id="clearReader" class="danger">🧹 Vaciar cola</button>
   </div>
+  <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
+  <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
+  <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
+  <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a la fuente /comments.</div>
+  <button id="copyCommentsUrl">📋 Copiar URL de Verity para PRISM</button>
+  <input id="commentsUrl" readonly>
   <div id="tiktokStatus">TikTok desconectado</div>
   <div id="tiktokStats" class="stats"></div>
   <div id="lastLive">Esperando comentarios…</div>
@@ -1872,10 +1997,28 @@ const toggleReader=document.getElementById('toggleReader');
 const toggleReaderName=document.getElementById('toggleReaderName');
 const testReader=document.getElementById('testReader');
 const clearReader=document.getElementById('clearReader');
+const readerTestName=document.getElementById('readerTestName');
+const readerTestComment=document.getElementById('readerTestComment');
+const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
+const readerTestStatus=document.getElementById('readerTestStatus');
+const copyCommentsUrl=document.getElementById('copyCommentsUrl');
+const commentsUrl=document.getElementById('commentsUrl');
 const tiktokStatus=document.getElementById('tiktokStatus');
 const tiktokStats=document.getElementById('tiktokStats');
 const lastLive=document.getElementById('lastLive');
 let liveState=null;
+commentsUrl.value=location.origin+'/comments';
+
+copyCommentsUrl.onclick=async()=>{
+  try{
+    await navigator.clipboard.writeText(commentsUrl.value);
+    readerTestStatus.textContent='✅ URL de Verity copiada. Pegala como fuente web en PRISM.';
+  }catch{
+    commentsUrl.focus();
+    commentsUrl.select();
+    readerTestStatus.textContent='Mantené pulsado el enlace y tocá Copiar.';
+  }
+};
 
 async function api(path,body,method='POST'){
   const opt={method,headers:{'authorization':'Bearer '+KEY}};
@@ -1976,17 +2119,53 @@ toggleReaderName.onclick=async()=>{
   }
 };
 
+async function playLocalVerity(url){
+  if(!url)throw new Error('audio_url_missing');
+  audio.pause();
+  audio.currentTime=0;
+  audio.src=url;
+  audio.muted=false;
+  await audio.play();
+}
+
 testReader.onclick=async()=>{
   testReader.disabled=true;
   tiktokStatus.textContent='🎧 Generando prueba de Verity…';
+  readerTestStatus.textContent='Generando voz…';
   try{
-    await api('/api/tiktok/reader/test',{});
-    tiktokStatus.textContent='✅ Prueba de Verity enviada a PRISM';
+    const j=await api('/api/tiktok/reader/test',{});
+    await playLocalVerity(j.audio_url);
+    tiktokStatus.textContent='✅ Verity sonando';
+    readerTestStatus.textContent='✅ La escuchaste en este celular y también se envió a /comments.';
     await refreshTikTok();
   }catch(e){
     tiktokStatus.textContent='🔴 Verity: '+String(e.message||e);
+    readerTestStatus.textContent='❌ '+String(e.message||e);
   }finally{
     testReader.disabled=false;
+  }
+};
+
+readerTestCommentBtn.onclick=async()=>{
+  const text=readerTestComment.value.trim();
+  if(!text){
+    readerTestStatus.textContent='Escribí un comentario de prueba primero.';
+    return;
+  }
+  readerTestCommentBtn.disabled=true;
+  readerTestStatus.textContent='💬 Generando comentario con Verity…';
+  try{
+    const j=await api('/api/tiktok/reader/test',{
+      comment:text,
+      username:readerTestName.value.trim(),
+      displayName:readerTestName.value.trim()
+    });
+    await playLocalVerity(j.audio_url);
+    readerTestStatus.textContent='✅ Verity leyó: “'+j.speech_text+'”';
+  }catch(e){
+    readerTestStatus.textContent='❌ '+String(e.message||e);
+  }finally{
+    readerTestCommentBtn.disabled=false;
   }
 };
 
@@ -2328,6 +2507,14 @@ const server = http.createServer(async (req, res) => {
     return res.end(prismPage);
   }
 
+  if (req.method === 'GET' && u.pathname === '/comments') {
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store'
+    });
+    return res.end(commentsPage);
+  }
+
   if (req.method === 'GET' && u.pathname === '/events') {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -2395,11 +2582,34 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && u.pathname === '/api/tiktok/reader/test') {
     if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
-      const speechText = 'Hola, soy Verity. Ya puedo leer los comentarios del directo.';
+      const body = await readJson(req);
+      const comment = cleanTikTokReaderText(body.comment || '');
+      const username = String(body.username || '').trim().slice(0, 80);
+      const displayName = String(body.displayName || username || '').trim().slice(0, 80);
+      const speechText = comment
+        ? tikTokReaderSpeech({ comment, username, displayName })
+        : 'Hola, soy Verity. Ya puedo leer los comentarios del directo.';
       const audioUrl = await makeCommentVoice(speechText);
       const at = Date.now();
-      broadcast({ type: 'audio', url: audioUrl, text: speechText, spoken_text: speechText, source: 'tiktok-comment-reader', voice: 'verity', at });
-      return json(res, 200, { ok: true, voice: 'verity', configured: Boolean(FISH_COMMENT_API_KEY) });
+      broadcast({
+        type: 'audio',
+        url: audioUrl,
+        text: comment || speechText,
+        spoken_text: speechText,
+        source: 'tiktok-comment-reader',
+        voice: 'verity',
+        username,
+        displayName,
+        comment,
+        at
+      });
+      return json(res, 200, {
+        ok: true,
+        voice: 'verity',
+        configured: Boolean(FISH_COMMENT_API_KEY),
+        audio_url: audioUrl,
+        speech_text: speechText
+      });
     } catch (e) {
       tiktokState.readerError = String(e?.message || e).slice(0, 240);
       return json(res, 500, { ok: false, error: tiktokState.readerError, configured: Boolean(FISH_COMMENT_API_KEY) });
