@@ -994,6 +994,49 @@ async function connectTikTokLive(username) {
     });
   });
 
+  connection.on('gift', data => {
+    const giftType = Number(data?.giftDetails?.giftType ?? data?.giftType ?? data?.gift?.gift_type ?? 0);
+    const repeatCount = Math.max(1, Number(data?.repeatCount ?? data?.gift?.repeat_count ?? 1) || 1);
+    const repeatEndRaw = data?.repeatEnd ?? data?.gift?.repeat_end;
+    const repeatEnd = repeatEndRaw === true || Number(repeatEndRaw) === 1;
+    if (giftType === 1 && !repeatEnd) return;
+
+    const username = String(data?.user?.uniqueId || data?.uniqueId || '').trim();
+    const displayName = String(data?.user?.nickname || data?.nickname || username || '').trim();
+    const giftName = String(
+      data?.giftDetails?.giftName ||
+      data?.giftName ||
+      data?.extendedGiftInfo?.name ||
+      'Regalo'
+    ).trim();
+    const giftPictureUrl = String(
+      data?.giftDetails?.giftPictureUrl ||
+      data?.giftPictureUrl ||
+      data?.giftDetails?.giftImage?.urlList?.[0] ||
+      data?.extendedGiftInfo?.pictureUrl ||
+      ''
+    ).trim();
+    const giftId = String(data?.giftId || data?.giftDetails?.giftId || data?.gift?.gift_id || '');
+    const diamondCount = Number(
+      data?.giftDetails?.diamondCount ??
+      data?.diamondCount ??
+      data?.extendedGiftInfo?.diamondCount ??
+      0
+    ) || 0;
+
+    broadcast({
+      type: 'tiktok_gift',
+      username,
+      displayName,
+      giftName,
+      giftPictureUrl,
+      giftId,
+      repeatCount,
+      diamondCount,
+      at: Date.now()
+    });
+  });
+
   connection.on('disconnected', () => {
     if (tiktokConnection === connection) {
       tiktokState.status = 'disconnected';
@@ -2031,6 +2074,11 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a la fuente /comments.</div>
   <button id="copyCommentsUrl">📋 Copiar URL de Verity para PRISM</button>
   <input id="commentsUrl" readonly>
+  <div class="row">
+    <button id="openVerity">🎭 Control Mini Verity</button>
+    <button id="copyVerityUrl">📋 Copiar /verity</button>
+  </div>
+  <input id="verityUrl" readonly>
   <button id="copyChatUrl">📺 Copiar panel visual de comentarios</button>
   <input id="chatUrl" readonly>
   <button id="testChat">🧪 Mostrar comentario en pantalla (sin voz)</button>
@@ -2075,6 +2123,9 @@ const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
 const readerTestStatus=document.getElementById('readerTestStatus');
 const copyCommentsUrl=document.getElementById('copyCommentsUrl');
 const commentsUrl=document.getElementById('commentsUrl');
+const openVerity=document.getElementById('openVerity');
+const copyVerityUrl=document.getElementById('copyVerityUrl');
+const verityUrl=document.getElementById('verityUrl');
 const copyChatUrl=document.getElementById('copyChatUrl');
 const chatUrl=document.getElementById('chatUrl');
 const testChat=document.getElementById('testChat');
@@ -2083,7 +2134,19 @@ const tiktokStats=document.getElementById('tiktokStats');
 const lastLive=document.getElementById('lastLive');
 let liveState=null;
 commentsUrl.value=location.origin+'/comments';
+verityUrl.value=location.origin+'/verity';
 chatUrl.value=location.origin+'/chat';
+
+openVerity.onclick=()=>{location.href='/verity-control?key='+encodeURIComponent(KEY);};
+copyVerityUrl.onclick=async()=>{
+  try{
+    await navigator.clipboard.writeText(verityUrl.value);
+    readerTestStatus.textContent='✅ URL de Mini Verity copiada. Agregala como otra Fuente web en PRISM.';
+  }catch{
+    verityUrl.focus();verityUrl.select();
+    readerTestStatus.textContent='Seleccioná y copiá la URL de Mini Verity.';
+  }
+};
 
 copyChatUrl.onclick=async()=>{
   try{
@@ -2359,9 +2422,17 @@ const jsAvatar = require('./avatar')({
   readJson
 });
 
+const verityAvatar = require('./verity-avatar')({
+  broadcast,
+  controllerKey: CONTROLLER_KEY,
+  isAuthorized: isControllerAuthorized,
+  readJson
+});
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (await jsAvatar.handle(req, res, u)) return;
+  if (await verityAvatar.handle(req, res, u)) return;
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
