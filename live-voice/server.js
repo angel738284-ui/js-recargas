@@ -1735,6 +1735,8 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 #stop{background:#333;color:#fff}
 #monitor{background:#2b2b2b;color:#fff}
 #monitor.on{background:#fff;color:#111}
+#humanTalk{background:#234d34;color:#fff}
+#humanTalk.on{background:#71e67d;color:#102214}
 #status{margin-top:14px;font-weight:700}
 #heard{margin-top:12px;line-height:1.4;min-height:48px}
 .small{opacity:.75;font-size:13px;margin-top:10px}
@@ -1748,12 +1750,13 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <button id="start">🟢 Iniciar micrófono AUTO</button>
   <button id="stop">🔴 Detener</button>
   <button id="monitor">🔇 Escuchar en este celular: OFF</button>
+  <button id="humanTalk">🎙️ Hablar normal: OFF</button>
   <a class="link" href="/music-control?key=${encodeURIComponent(key)}">🎵 Abrir JS Music</a>
   <a class="link" href="/avatar-control?key=${encodeURIComponent(key)}">🎭 Controlar avatar JS</a>
   <a class="link" href="/mini-js-control?key=${encodeURIComponent(key)}">💬 TikTok + Verity</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
-  <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
+  <div class="small">AUTO clona tu voz como siempre. “Hablar normal” usa tu micrófono solo para mover la boca de JS y pausa las voces automáticas; tu voz real sale por el micrófono de PRISM.</div>
 </div>
 <audio id="audio" playsinline></audio>
 <script>
@@ -1761,6 +1764,7 @@ const KEY=${JSON.stringify(key)};
 const startBtn=document.getElementById('start');
 const stopBtn=document.getElementById('stop');
 const monitorBtn=document.getElementById('monitor');
+const humanTalkBtn=document.getElementById('humanTalk');
 const statusEl=document.getElementById('status');
 const heardEl=document.getElementById('heard');
 const audio=document.getElementById('audio');
@@ -1781,6 +1785,11 @@ let threshold=0.026;
 let noiseFloor=0.008;
 let calibratingUntil=0;
 let monitorLocal=false;
+let humanMode=false;
+let humanRaf=0;
+let humanLastSent=0;
+let humanNoise=0.006;
+let humanCalibratingUntil=0;
 
 monitorBtn.onclick=()=>{
   monitorLocal=!monitorLocal;
@@ -1933,10 +1942,8 @@ function vadLoop(){
   raf=requestAnimationFrame(vadLoop);
 }
 
-async function startAuto(){
-  if(autoMode)return;
-  await unlockAudio();
-
+async function ensureMic(){
+  if(stream&&analyser)return true;
   try{
     stream=await navigator.mediaDevices.getUserMedia({
       audio:{
@@ -1947,9 +1954,8 @@ async function startAuto(){
     });
   }catch(e){
     statusEl.textContent='Permití el micrófono en Chrome';
-    return;
+    return false;
   }
-
   ctx=new (window.AudioContext||window.webkitAudioContext)();
   await ctx.resume();
   const source=ctx.createMediaStreamSource(stream);
@@ -1958,6 +1964,27 @@ async function startAuto(){
   analyser.smoothingTimeConstant=0.15;
   source.connect(analyser);
   dataArray=new Uint8Array(analyser.fftSize);
+  return true;
+}
+
+function closeMic(){
+  if(stream){
+    for(const t of stream.getTracks())t.stop();
+  }
+  stream=null;
+  if(ctx){
+    try{ctx.close();}catch{}
+  }
+  ctx=null;
+  analyser=null;
+  dataArray=null;
+}
+
+async function startAuto(){
+  if(autoMode)return;
+  if(humanMode)stopHumanTalk();
+  await unlockAudio();
+  if(!(await ensureMic()))return;
 
   chunks=[];
   autoMode=true;
@@ -1979,27 +2006,88 @@ function stopAuto(){
   speechActive=false;
   recorder=null;
   chunks=[];
-  if(stream){
-    for(const t of stream.getTracks())t.stop();
-  }
-  stream=null;
-  if(ctx){
-    try{ctx.close();}catch{}
-  }
-  ctx=null;
-  analyser=null;
+  if(!humanMode)closeMic();
   statusEl.textContent='Detenido';
 }
 
-startBtn.onclick=startAuto;
-stopBtn.onclick=stopAuto;
+function sendHumanTalk(active,level,keepalive=false){
+  fetch('/api/avatar/control',{
+    method:'POST',
+    headers:{'content-type':'application/json','authorization':'Bearer '+KEY},
+    body:JSON.stringify({action:'human-talk',active:Boolean(active),level:Number(level)||0}),
+    keepalive
+  }).catch(()=>{});
+}
+
+function humanLoop(){
+  if(!humanMode||!analyser)return;
+  const now=Date.now();
+  const rms=rmsLevel();
+
+  if(now<humanCalibratingUntil){
+    humanNoise=humanNoise*0.86+rms*0.14;
+  }else{
+    const gate=Math.max(0.012,humanNoise*2.15);
+    if(rms<gate*0.9)humanNoise=humanNoise*0.985+rms*0.015;
+  }
+
+  const gate=Math.max(0.012,humanNoise*2.15);
+  const level=now<humanCalibratingUntil
+    ? 0
+    : (rms<=gate?0:Math.min(1,0.12+(rms-gate)/0.075));
+
+  if(now-humanLastSent>=140){
+    humanLastSent=now;
+    sendHumanTalk(true,level);
+    statusEl.textContent=now<humanCalibratingUntil
+      ? '🎙️ Calibrando Hablar normal…'
+      : level>0.08
+        ? '🗣️ Hablando vos · JS te sigue'
+        : '🎙️ Hablar normal activo · JS esperando tu voz';
+  }
+  humanRaf=requestAnimationFrame(humanLoop);
+}
+
+async function startHumanTalk(){
+  if(humanMode)return;
+  if(autoMode)stopAuto();
+  try{audio.pause();}catch{}
+  await unlockAudio();
+  if(!(await ensureMic()))return;
+
+  humanMode=true;
+  humanNoise=0.006;
+  humanCalibratingUntil=Date.now()+650;
+  humanLastSent=0;
+  humanTalkBtn.classList.add('on');
+  humanTalkBtn.textContent='🎙️ Hablar normal: ON';
+  heardEl.textContent='Tu voz real sale por el micrófono de PRISM. JS mueve la boca con este micrófono.';
+  sendHumanTalk(true,0);
+  humanLoop();
+}
+
+function stopHumanTalk(){
+  if(!humanMode)return;
+  humanMode=false;
+  if(humanRaf)cancelAnimationFrame(humanRaf);
+  humanRaf=0;
+  sendHumanTalk(false,0,true);
+  humanTalkBtn.classList.remove('on');
+  humanTalkBtn.textContent='🎙️ Hablar normal: OFF';
+  if(!autoMode)closeMic();
+  statusEl.textContent='Hablar normal detenido · voces automáticas reanudadas';
+}
+
+startBtn.onclick=()=>{if(humanMode)stopHumanTalk();startAuto();};
+stopBtn.onclick=()=>{if(humanMode)stopHumanTalk();if(autoMode)stopAuto();else statusEl.textContent='Detenido';};
+humanTalkBtn.onclick=()=>humanMode?stopHumanTalk():startHumanTalk();
 
 const events=new EventSource('/events');
 events.onmessage=async(ev)=>{
   try{
     const msg=JSON.parse(ev.data);
     if(msg.type==='audio'&&msg.url){
-      if(msg.source==='tiktok-comment-reader')return;
+      if(msg.source==='tiktok-comment-reader'||humanMode)return;
       if(speechActive)finishPhrase();
       busy=true;
       audio.src=msg.url;
@@ -2016,6 +2104,10 @@ events.onmessage=async(ev)=>{
     if(autoMode)statusEl.textContent='🎙️ Escuchando…';
   }
 };
+
+window.addEventListener('pagehide',()=>{
+  if(humanMode)sendHumanTalk(false,0,true);
+});
 </script>
 </body>
 </html>`;
