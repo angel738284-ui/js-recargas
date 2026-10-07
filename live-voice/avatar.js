@@ -84,7 +84,7 @@ events.onmessage=(e)=>{
    const m=JSON.parse(e.data);
    if(m.type==='avatar_state')update(m);
    else if(m.type==='avatar_demo'){talkingAt=Date.now();talkingUntil=talkingAt+5000;}
-   else if(m.type==='audio'&&m.url)voice(m);
+   else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
  }catch{}
 };
 fetch('/api/avatar/state',{cache:'no-store'}).then(r=>r.json()).then(update).catch(()=>{});
