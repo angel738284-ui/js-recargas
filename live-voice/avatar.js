@@ -22,16 +22,37 @@ module.exports = function createAvatar({broadcast, controllerKey, isAuthorized, 
 html,body{background:transparent!important;margin:0;width:100%;height:100%;overflow:hidden}
 #actor{position:fixed;bottom:0;right:0;width:220px;max-width:100vw;pointer-events:none;transform-origin:bottom center;animation:breathe 3.7s ease-in-out infinite}
 #face{display:block;width:100%;height:auto}
+#giftFx{position:fixed;bottom:116px;right:188px;z-index:20;display:flex;align-items:center;gap:7px;opacity:0;pointer-events:none;filter:drop-shadow(0 3px 6px rgba(0,0,0,.45))}
+#giftFx.left{right:auto;left:188px}
+#giftIcon{width:62px;height:62px;object-fit:contain;display:none}
+#giftEmoji{font-size:58px;line-height:1;display:block}
+#giftNote{position:fixed;bottom:245px;right:10px;z-index:21;max-width:260px;padding:9px 12px;border-radius:13px;background:rgba(0,0,0,.72);color:#fff;font:700 14px/1.25 system-ui,-apple-system,sans-serif;text-shadow:0 1px 2px #000;opacity:0;pointer-events:none;text-align:center}
+#giftNote.left{right:auto;left:10px}
+#giftFx.show{animation:giftFlyRight 2.6s cubic-bezier(.22,.8,.25,1) both}
+#giftFx.show.left{animation-name:giftFlyLeft}
+#giftNote.show{animation:giftNote 2.8s ease both}
+#actor.gift-react{animation:giftReact .78s ease-in-out 2}
 @keyframes breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-3px) scale(1.012)}}
+@keyframes giftFlyRight{0%{transform:translate(170px,-90px) scale(.45) rotate(15deg);opacity:0}14%{opacity:1}62%{transform:translate(0,0) scale(1.12) rotate(-5deg);opacity:1}82%{transform:translate(18px,28px) scale(.88) rotate(0);opacity:1}100%{transform:translate(18px,28px) scale(.65);opacity:0}}
+@keyframes giftFlyLeft{0%{transform:translate(-170px,-90px) scale(.45) rotate(-15deg);opacity:0}14%{opacity:1}62%{transform:translate(0,0) scale(1.12) rotate(5deg);opacity:1}82%{transform:translate(-18px,28px) scale(.88) rotate(0);opacity:1}100%{transform:translate(-18px,28px) scale(.65);opacity:0}}
+@keyframes giftNote{0%,8%{opacity:0;transform:translateY(8px)}18%,76%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-7px)}}
+@keyframes giftReact{0%,100%{transform:translateY(0) scale(1)}35%{transform:translateY(-8px) scale(1.025)}65%{transform:translateY(-2px) scale(.995)}}
 </style></head><body>
 <div id="actor"><canvas id="face" width="512" height="512"></canvas></div>
+<div id="giftFx" aria-hidden="true"><img id="giftIcon" alt=""><span id="giftEmoji">🌹</span></div>
+<div id="giftNote" aria-live="polite"></div>
 <script>
 const actor=document.getElementById('actor');
+const giftFx=document.getElementById('giftFx');
+const giftIcon=document.getElementById('giftIcon');
+const giftEmoji=document.getElementById('giftEmoji');
+const giftNote=document.getElementById('giftNote');
 const canvas=document.getElementById('face');
 const ctx=canvas.getContext('2d',{alpha:true});
 const atlas=new Image();atlas.src='/avatar-image.webp?v=hd2';
 let state={visible:true,mood:'normal',side:'right',size:220};
 let talkingAt=0,talkingUntil=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500,speechId=0;
+const giftQueue=[];let giftBusy=false;
 const patches={
  talk1:{s:[0,512,110,63],d:[238,157,110,63]},
  talk2:{s:[114,512,110,63],d:[238,157,110,63]},
@@ -44,6 +65,8 @@ function update(s){
  actor.style.width=Math.max(100,Math.min(360,Number(state.size)||220))+'px';
  actor.style.left=state.side==='left'?'0':'auto';
  actor.style.right=state.side==='left'?'auto':'0';
+ giftFx.classList.toggle('left',state.side==='left');
+ giftNote.classList.toggle('left',state.side==='left');
 }
 function frame(name){
  if(!atlas.complete||!atlas.naturalWidth||name===lastFrame)return;
@@ -78,12 +101,38 @@ function voice(m){
  };
  probe.src=m.url;
 }
+function cleanGiftName(v){return String(v||'Regalo').replace(/[<>]/g,'').trim().slice(0,40)||'Regalo';}
+function cleanGiftUser(v){return String(v||'Alguien').replace(/^@/,'').replace(/[<>]/g,'').trim().slice(0,32)||'Alguien';}
+function enqueueGift(m){giftQueue.push(m||{});if(giftQueue.length>12)giftQueue.splice(0,giftQueue.length-12);runGiftQueue();}
+function runGiftQueue(){
+ if(giftBusy||!giftQueue.length)return;
+ giftBusy=true;
+ const m=giftQueue.shift();
+ const giftName=cleanGiftName(m.giftName||m.gift_name);
+ const user=cleanGiftUser(m.displayName||m.username||m.uniqueId);
+ const count=Math.max(1,Math.min(999,Number(m.repeatCount)||1));
+ const picture=String(m.giftPictureUrl||'').trim();
+ const isRose=/\b(rose|rosa)\b/i.test(giftName);
+ giftEmoji.textContent=isRose?'🌹':'🎁';
+ giftEmoji.style.display=picture?'none':'block';
+ giftIcon.style.display=picture?'block':'none';
+ if(picture){giftIcon.src=picture;giftIcon.alt=giftName;}else{giftIcon.removeAttribute('src');giftIcon.alt='';}
+ giftNote.textContent='@'+user+' envió '+giftName+(count>1?' ×'+count:'');
+ giftFx.classList.remove('show');giftNote.classList.remove('show');actor.classList.remove('gift-react');
+ void giftFx.offsetWidth;
+ giftFx.classList.add('show');giftNote.classList.add('show');actor.classList.add('gift-react');
+ setTimeout(()=>{
+   giftFx.classList.remove('show');giftNote.classList.remove('show');actor.classList.remove('gift-react');
+   giftBusy=false;runGiftQueue();
+ },2900);
+}
 const events=new EventSource('/events');
 events.onmessage=(e)=>{
  try{
    const m=JSON.parse(e.data);
    if(m.type==='avatar_state')update(m);
    else if(m.type==='avatar_demo'){talkingAt=Date.now();talkingUntil=talkingAt+5000;}
+   else if(m.type==='tiktok_gift')enqueueGift(m);
    else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
  }catch{}
 };
@@ -107,8 +156,9 @@ iframe{border:0;width:100%;height:100%}#status{color:#9eedae;font-size:14px}
 <div id="prev"><iframe src="/avatar" title="Vista previa"></iframe></div>
 <p id="status">Conectando...</p>
 <div class="row"><button id="show">🙈 Ocultar</button><button id="demo">🗣️ Probar boca</button></div>
-<div class="row"><button id="normal">😐 Normal</button><button id="smirk">😏 Sarcástico</button></div>
-<div class="row"><button id="left">⬅️ Izquierda</button><button id="right">➡️ Derecha</button></div>
+<div class="row"><button id="giftDemo">🌹 Probar rosa</button><button id="normal">😐 Normal</button></div>
+<div class="row"><button id="smirk">😏 Sarcástico</button><button id="left">⬅️ Izquierda</button></div>
+<button style="width:100%;margin-top:8px" id="right">➡️ Poner a la derecha</button>
 <p>Tamaño: <b id="label">220px</b></p><input id="size" type="range" min="110" max="360" step="10" value="220">
 <p>En PRISM agregá la fuente web <b>https://js-live-voice.onrender.com/avatar</b>. Es visual: la voz sigue saliendo por /prism.</p>
 <button style="width:100%" id="copy">Copiar URL para PRISM</button>
@@ -128,6 +178,7 @@ async function send(action,more={}){
 }
 document.getElementById('show').onclick=()=>send('visible',{visible:!state.visible});
 document.getElementById('demo').onclick=()=>send('demo');
+document.getElementById('giftDemo').onclick=()=>send('gift-demo');
 document.getElementById('normal').onclick=()=>send('mood',{mood:'normal'});
 document.getElementById('smirk').onclick=()=>send('mood',{mood:'smirk'});
 document.getElementById('left').onclick=()=>send('side',{side:'left'});
@@ -161,8 +212,9 @@ new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.typ
         else if(action==='side')state.side=body.side==='left'?'left':'right';
         else if(action==='mood')state.mood=body.mood==='smirk'?'smirk':'normal';
         else if(action==='demo')broadcast({type:'avatar_demo',at:Date.now()});
+        else if(action==='gift-demo')broadcast({type:'tiktok_gift',username:'prueba_js',displayName:'Prueba JS',giftName:'Rosa',repeatCount:1,giftPictureUrl:'',giftId:'demo-rose',test:true,at:Date.now()});
         else{write(res,400,{ok:false,error:'unknown_action'});return true;}
-        if(action!=='demo')publish();write(res,200,{ok:true,...snapshot()});
+        if(action!=='demo'&&action!=='gift-demo')publish();write(res,200,{ok:true,...snapshot()});
       }catch(e){write(res,400,{ok:false,error:String(e.message||e)});}
       return true;
     }
