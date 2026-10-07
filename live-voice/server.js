@@ -1341,6 +1341,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <button id="stop">🔴 Detener</button>
   <button id="monitor">🔇 Escuchar en este celular: OFF</button>
   <a class="link" href="/music-control?key=${encodeURIComponent(key)}">🎵 Abrir JS Music</a>
+  <a class="link" href="/avatar-control?key=${encodeURIComponent(key)}">🎭 Controlar avatar JS</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
   <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
@@ -1831,8 +1832,16 @@ setInterval(refreshTikTok,5000);
 </html>`;
 }
 
+const jsAvatar = require('./avatar')({
+  broadcast,
+  controllerKey: CONTROLLER_KEY,
+  isAuthorized: isControllerAuthorized,
+  readJson
+});
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
+  if (await jsAvatar.handle(req, res, u)) return;
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
