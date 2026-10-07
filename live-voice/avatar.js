@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-module.exports = function createAvatar({broadcast, controllerKey, isAuthorized, readJson}) {
+module.exports = function createAvatar({broadcast, controllerKey, isAuthorized, readJson, readBuffer}) {
   const asset = path.join(__dirname, 'avatar.webp');
   const state = {visible:true, mood:'normal', side:'right', size:220};
   const snapshot = () => ({...state});
@@ -56,6 +56,7 @@ let state={visible:true,mood:'normal',side:'right',size:220};
 let talkingAt=0,lastFrame='',blinkAt=0,nextBlink=Date.now()+3500;
 let speaking=false,demoUntil=0,audioQueue=[],currentAudio=null;
 let humanMode=false,humanLevel=0,humanUntil=0,pausedForHuman=false;
+let humanAudioCtx=null,humanNextPlayAt=0;
 const giftQueue=[];let giftBusy=false;
 const patches={
  talk1:{s:[0,512,110,63],d:[238,157,110,63]},
@@ -134,12 +135,49 @@ function voice(m){
  if(audioQueue.length>20)audioQueue.splice(0,audioQueue.length-20);
  playNextAudio();
 }
+function ensureHumanAudio(){
+ if(!humanAudioCtx){
+   humanAudioCtx=new (window.AudioContext||window.webkitAudioContext)();
+   humanNextPlayAt=0;
+ }
+ if(humanAudioCtx.state==='suspended')humanAudioCtx.resume().catch(()=>{});
+ return humanAudioCtx;
+}
+function playHumanAudio(m){
+ if(!m||!m.pcm)return;
+ humanMode=true;
+ humanLevel=Math.max(0,Math.min(1,Number(m.level)||0));
+ humanUntil=Date.now()+450;
+ try{
+   const raw=atob(m.pcm);
+   const count=Math.floor(raw.length/2);
+   if(!count)return;
+   const ctx=ensureHumanAudio();
+   const buf=ctx.createBuffer(1,count,Number(m.sampleRate)||16000);
+   const ch=buf.getChannelData(0);
+   for(let i=0;i<count;i++){
+     let v=raw.charCodeAt(i*2)|(raw.charCodeAt(i*2+1)<<8);
+     if(v&0x8000)v-=0x10000;
+     ch[i]=v/32768;
+   }
+   const src=ctx.createBufferSource();
+   src.buffer=buf;
+   src.connect(ctx.destination);
+   const now=ctx.currentTime;
+   if(!humanNextPlayAt||humanNextPlayAt<now+0.05||humanNextPlayAt>now+0.8){
+     humanNextPlayAt=now+0.10;
+   }
+   src.start(humanNextPlayAt);
+   humanNextPlayAt+=buf.duration;
+ }catch{}
+}
 function humanTalk(m){
  const active=Boolean(m&&m.active);
  if(active){
    humanMode=true;
    humanLevel=Math.max(0,Math.min(1,Number(m.level)||0));
-   humanUntil=Date.now()+350;
+   humanUntil=Date.now()+450;
+   ensureHumanAudio();
    if(currentAudio&&!audio.paused&&!pausedForHuman){
      pausedForHuman=true;
      speaking=false;
@@ -150,6 +188,7 @@ function humanTalk(m){
  humanMode=false;
  humanLevel=0;
  humanUntil=0;
+ humanNextPlayAt=0;
  if(currentAudio&&pausedForHuman){
    pausedForHuman=false;
    speaking=true;
@@ -191,6 +230,7 @@ events.onmessage=(e)=>{
    if(m.type==='avatar_state')update(m);
    else if(m.type==='avatar_demo'){demoUntil=Date.now()+5000;}
    else if(m.type==='human_talk')humanTalk(m);
+   else if(m.type==='human_audio')playHumanAudio(m);
    else if(m.type==='tiktok_gift')enqueueGift(m);
    else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
  }catch{}
@@ -228,7 +268,7 @@ iframe{border:0;width:100%;height:100%}#status{color:#9eedae;font-size:14px}
 <div class="row"><button id="smirk">😏 Sarcástico</button><button id="left">⬅️ Izquierda</button></div>
 <button style="width:100%;margin-top:8px" id="right">➡️ Poner a la derecha</button>
 <p>Tamaño: <b id="label">220px</b></p><input id="size" type="range" min="110" max="360" step="10" value="220">
-<p>En PRISM usá una sola fuente: <b>https://js-live-voice.onrender.com/avatar</b>. Ahora incluye el avatar 2D + la voz principal JS.</p>
+<p>En PRISM usá una sola fuente: <b>https://js-live-voice.onrender.com/avatar?v=human2</b>. Incluye avatar 2D + voz JS + modo Hablar normal.</p>
 <button style="width:100%" id="copy">Copiar URL para PRISM</button>
 </div>
 <script>
@@ -253,7 +293,7 @@ document.getElementById('left').onclick=()=>send('side',{side:'left'});
 document.getElementById('right').onclick=()=>send('side',{side:'right'});
 size.oninput=()=>{document.getElementById('label').textContent=size.value+'px';};
 size.onchange=()=>send('size',{size:Number(size.value)});
-document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/avatar');
+document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/avatar?v=human2');
 fetch('/api/avatar/state').then(r=>r.json()).then(paint).catch(()=>{});
 new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='avatar_state')paint(m)}catch{}};
 </script></body></html>`;}
@@ -270,6 +310,18 @@ new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.typ
       const key=String(u.searchParams.get('key')||'');
       if(!controllerKey||key!==controllerKey){write(res,404,{ok:false,error:'not_found'});return true;}
       html(res,controlPage(key));return true;
+    }
+    if(req.method==='POST'&&u.pathname==='/api/avatar/human-audio'){
+      if(!isAuthorized(req)){write(res,401,{ok:false,error:'unauthorized'});return true;}
+      try{
+        const pcm=await readBuffer(req,64*1024);
+        if(!pcm.length){write(res,400,{ok:false,error:'empty_audio'});return true;}
+        const level=Math.max(0,Math.min(1,Number(req.headers['x-human-level'])||0));
+        broadcast({type:'human_audio',pcm:pcm.toString('base64'),sampleRate:16000,level,at:Date.now()});
+        res.writeHead(204,{'cache-control':'no-store','access-control-allow-origin':'*'});
+        res.end();
+      }catch(e){write(res,400,{ok:false,error:String(e.message||e)});}
+      return true;
     }
     if(req.method==='POST'&&u.pathname==='/api/avatar/control'){
       if(!isAuthorized(req)){write(res,401,{ok:false,error:'unauthorized'});return true;}
