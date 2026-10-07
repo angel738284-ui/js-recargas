@@ -2646,6 +2646,7 @@ setInterval(refreshTikTok,5000);
 }
 
 const chatPage = require('./chat-overlay');
+const spotify = require('./spotify');
 
 const jsAvatar = require('./avatar')({
   broadcast,
@@ -2666,6 +2667,7 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (await jsAvatar.handle(req, res, u)) return;
   if (await verityAvatar.handle(req, res, u)) return;
+  if (await spotify.handle(req, res, u)) return;
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
