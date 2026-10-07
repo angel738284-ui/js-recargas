@@ -33,11 +33,15 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 @keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-7px) scale(1.015)}72%{transform:translateY(-2px) scale(.995)}}
 </style></head><body>
 <div id="actor"><img id="verityImg" src="/verity-image/normal-v3.webp" alt="Mini Verity"></div>
+<audio id="verityAudio" playsinline preload="auto"></audio>
 <script>
 const actor=document.getElementById('actor');
 const img=document.getElementById('verityImg');
+const audio=document.getElementById('verityAudio');
 let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
-let talkingUntil=0,reactionUntil=0,reactionMood='normal',speechId=0,lastSrc='';
+let reactionUntil=0,reactionMood='normal',lastSrc='';
+let queue=[],current=null,jsBlocks=0,pausedByJs=false;
+let speaking=false,demoUntil=0;
 
 const srcs={
  normal:'/verity-image/normal-v3.webp',
@@ -52,7 +56,7 @@ function update(s){
  actor.style.display=state.visible?'block':'none';
  actor.style.width=Math.max(90,Math.min(320,Number(state.size)||165))+'px';
  actor.classList.toggle('right',state.side==='right');
- if(Date.now()>=talkingUntil)render();
+ render();
 }
 function setImage(name){
  const next=srcs[name]||srcs.normal;
@@ -67,30 +71,92 @@ function detectMood(m){
 }
 function render(){
  const now=Date.now();
- const talking=now<talkingUntil;
+ const talking=(speaking&&jsBlocks===0)||now<demoUntil;
  actor.classList.toggle('talking',talking);
  if(talking){setImage('talk');return;}
  if(state.autoMood&&now<reactionUntil)setImage(reactionMood);
  else setImage(safeMood(state.mood));
 }
-function voice(m){
- if(!m||m.source!=='tiktok-comment-reader')return;
- const now=Date.now(),id=++speechId;
- const txt=String(m.spoken_text||m.text||'');
- reactionMood=detectMood(m);
- talkingUntil=now+Math.max(1200,Math.min(26000,Math.round(txt.length*86)+800));
- reactionUntil=talkingUntil+(reactionMood==='normal'?500:2300);
+function finishComment(showReaction=true){
+ speaking=false;
+ if(showReaction)reactionUntil=Date.now()+(reactionMood==='normal'?500:2300);
+ const finished=current;
+ current=null;
  render();
- const probe=new Audio();probe.preload='metadata';
- probe.onloadedmetadata=()=>{
-   if(id!==speechId||!Number.isFinite(probe.duration)||probe.duration<=0)return;
-   talkingUntil=Math.max(now+650,now+Math.min(60000,probe.duration*1000+450));
-   reactionUntil=talkingUntil+(reactionMood==='normal'?500:2300);
- };
- probe.src=m.url;
+ if(finished||queue.length)setTimeout(playNext,20);
 }
-function tick(){render();}
-setInterval(tick,90);
+async function playNext(){
+ if(current||jsBlocks>0||!queue.length)return;
+ current=queue.shift();
+ reactionMood=detectMood(current);
+ audio.onended=null;
+ audio.onerror=null;
+ audio.src=current.url;
+ audio.muted=false;
+ speaking=true;
+ render();
+ try{
+   await audio.play();
+   audio.onended=()=>finishComment(true);
+   audio.onerror=()=>finishComment(false);
+ }catch{
+   const failed=current;
+   current=null;
+   speaking=false;
+   render();
+   if(failed)queue.unshift(failed);
+   setTimeout(playNext,800);
+ }
+}
+function releaseJsBlock(){
+ jsBlocks=Math.max(0,jsBlocks-1);
+ if(jsBlocks>0)return;
+ if(current&&pausedByJs){
+   pausedByJs=false;
+   speaking=true;
+   render();
+   audio.play().catch(()=>setTimeout(()=>audio.play().catch(()=>{}),500));
+ }else{
+   playNext();
+ }
+}
+function pauseForJs(msg){
+ jsBlocks+=1;
+ if(current&&!audio.paused){
+   pausedByJs=true;
+   speaking=false;
+   try{audio.pause();}catch{}
+   render();
+ }
+ const probe=new Audio();
+ probe.muted=true;
+ probe.playsInline=true;
+ probe.preload='auto';
+ probe.src=msg.url;
+ let released=false,timer=0;
+ const done=()=>{
+   if(released)return;
+   released=true;
+   if(timer)clearTimeout(timer);
+   try{probe.pause();}catch{}
+   releaseJsBlock();
+ };
+ probe.onended=done;
+ probe.onerror=()=>{if(!timer)timer=setTimeout(done,1600);};
+ probe.onloadedmetadata=()=>{
+   if(Number.isFinite(probe.duration)&&probe.duration>0){
+     timer=setTimeout(done,Math.min(65000,probe.duration*1000+500));
+   }
+ };
+ probe.play().catch(()=>{if(!timer)timer=setTimeout(done,5000);});
+}
+function enqueueComment(msg){
+ if(!msg||!msg.url)return;
+ queue.push(msg);
+ playNext();
+}
+setInterval(render,90);
+
 const events=new EventSource('/events');
 events.onmessage=e=>{
  try{
@@ -99,10 +165,24 @@ events.onmessage=e=>{
    else if(m.type==='verity_demo'){
      const now=Date.now();
      reactionMood=safeMood(m.mood||state.mood);
-     talkingUntil=now+4300;reactionUntil=talkingUntil+1800;render();
-   }else if(m.type==='audio'&&m.url&&m.source==='tiktok-comment-reader')voice(m);
+     demoUntil=now+4300;
+     reactionUntil=demoUntil+1800;
+     render();
+   }else if(m.type==='audio'&&m.url){
+     if(m.source==='tiktok-comment-reader')enqueueComment(m);
+     else pauseForJs(m);
+   }
  }catch{}
 };
+
+document.body.addEventListener('pointerdown',()=>{
+ if(current&&audio.paused&&jsBlocks===0){
+   speaking=true;render();audio.play().catch(()=>{});
+ }
+},{once:true});
+
+setInterval(()=>fetch('/keepalive',{cache:'no-store'}).catch(()=>{}),120000);
+fetch('/keepalive',{cache:'no-store'}).catch(()=>{});
 fetch('/api/verity/state',{cache:'no-store'}).then(r=>r.json()).then(update).catch(()=>{});
 </script></body></html>`;}
 
