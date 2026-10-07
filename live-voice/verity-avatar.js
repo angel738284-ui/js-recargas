@@ -4,8 +4,11 @@ const path = require('path');
 
 module.exports = function createVerityAvatar({broadcast, controllerKey, isAuthorized, readJson}) {
   const assets = {
-    'normal-v3': path.join(__dirname, 'verity-normal-v3.webp'),
-    'talk-v2': path.join(__dirname, 'verity-talk-v2.webp'),
+    'idle-v5': path.join(__dirname, 'verity-idle-v5.webp'),
+    'open-v5': path.join(__dirname, 'verity-open-v5.webp'),
+    'blink-v5': path.join(__dirname, 'verity-blink-v5.webp'),
+    'mid-v5': path.join(__dirname, 'verity-mid-v5.webp'),
+    'talkblink-v5': path.join(__dirname, 'verity-talkblink-v5.webp'),
     'grin-v2': path.join(__dirname, 'verity-grin-v2.webp'),
     'crazy-v2': path.join(__dirname, 'verity-crazy-v2.webp')
   };
@@ -29,10 +32,10 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 #actor{position:fixed;bottom:0;left:0;width:165px;max-width:100vw;pointer-events:none;transform-origin:bottom center}
 #actor.right{left:auto;right:0}
 #verityImg{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none}
-#actor.talking{animation:talkBounce .42s cubic-bezier(.35,.05,.2,1) infinite}
-@keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-7px) scale(1.015)}72%{transform:translateY(-2px) scale(.995)}}
+#actor.talking{animation:talkBounce .44s cubic-bezier(.35,.05,.2,1) infinite}
+@keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-4px) scale(1.01)}72%{transform:translateY(-1px) scale(.997)}}
 </style></head><body>
-<div id="actor"><img id="verityImg" src="/verity-image/normal-v3.webp" alt="Mini Verity"></div>
+<div id="actor"><img id="verityImg" src="/verity-image/idle-v5.webp" alt="Mini Verity"></div>
 <audio id="verityAudio" playsinline preload="auto"></audio>
 <script>
 const actor=document.getElementById('actor');
@@ -42,10 +45,15 @@ let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
 let reactionUntil=0,reactionMood='normal',lastSrc='';
 let queue=[],current=null,jsBlocks=0,pausedByJs=false;
 let speaking=false,demoUntil=0;
+let nextBlink=Date.now()+1800+Math.random()*2200,blinkUntil=0;
 
 const srcs={
- normal:'/verity-image/normal-v3.webp',
- talk:'/verity-image/talk-v2.webp',
+ normal:'/verity-image/idle-v5.webp',
+ closed:'/verity-image/idle-v5.webp',
+ mid:'/verity-image/mid-v5.webp',
+ open:'/verity-image/open-v5.webp',
+ blink:'/verity-image/blink-v5.webp',
+ talkblink:'/verity-image/talkblink-v5.webp',
  grin:'/verity-image/grin-v2.webp',
  crazy:'/verity-image/crazy-v2.webp'
 };
@@ -69,13 +77,29 @@ function detectMood(m){
  if(/(jaj|jeje|jiji|xd|😂|🤣|💀|lol)/i.test(text))return 'grin';
  return 'normal';
 }
+function isBlinking(now){
+ if(now>=nextBlink){
+   blinkUntil=now+150;
+   nextBlink=now+2800+Math.random()*3000;
+ }
+ return now<blinkUntil;
+}
+function mouthFrame(now){
+ const n=Math.floor(now/135)%5;
+ return n===0||n===4?'closed':n===2?'open':'mid';
+}
 function render(){
  const now=Date.now();
  const talking=(speaking&&jsBlocks===0)||now<demoUntil;
+ const blinking=isBlinking(now);
  actor.classList.toggle('talking',talking);
- if(talking){setImage('talk');return;}
- if(state.autoMood&&now<reactionUntil)setImage(reactionMood);
- else setImage(safeMood(state.mood));
+ if(talking){
+   setImage(blinking?'talkblink':mouthFrame(now));
+   return;
+ }
+ const mood=state.autoMood&&now<reactionUntil?reactionMood:safeMood(state.mood);
+ if(blinking&&mood==='normal')setImage('blink');
+ else setImage(mood);
 }
 function finishComment(showReaction=true){
  speaking=false;
@@ -155,7 +179,7 @@ function enqueueComment(msg){
  queue.push(msg);
  playNext();
 }
-setInterval(render,90);
+setInterval(render,80);
 
 const events=new EventSource('/events');
 events.onmessage=e=>{
@@ -202,7 +226,7 @@ button.on{background:#ffe65e;color:#221d00}input[type=range]{width:100%}
 </style></head><body>
 <div class="card">
 <h2>🟡 Mini Verity</h2>
-<p>Quieto queda apoyado en el piso. Cuando habla Verity cambia a la boca abierta y rebota. Después puede reaccionar con sonrisa grande o modo loco.</p>
+<p>Quieto queda apoyado y parpadea solo. Al hablar rebota, también puede parpadear y anima la boca cerrada → media → abierta → media → cerrada.</p>
 <div id="prev"><iframe src="/verity" title="Mini Verity"></iframe></div>
 <p id="status">Conectando…</p>
 <div class="row"><button id="show">🙈 Ocultar</button><button id="demo">🗣️ Probar habla</button></div>
