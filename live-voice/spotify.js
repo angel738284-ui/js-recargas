@@ -7,7 +7,6 @@ const os = require('os');
 const crypto = require('crypto');
 
 const CLIENT_ID = String(process.env.SPOTIFY_CLIENT_ID || '');
-const CLIENT_SECRET = String(process.env.SPOTIFY_CLIENT_SECRET || '');
 const REDIRECT_URI = String(process.env.SPOTIFY_REDIRECT_URI || 'https://js-live-voice.onrender.com/spotify/callback');
 const CONTROLLER_KEY = String(process.env.CONTROLLER_KEY || '');
 const LIVE_TOKEN = String(process.env.LIVE_TOKEN || '');
@@ -62,16 +61,19 @@ function authorized(req) {
 }
 
 function configured() {
-  return Boolean(CLIENT_ID && CLIENT_SECRET && REDIRECT_URI);
+  return Boolean(CLIENT_ID && REDIRECT_URI);
 }
 
-async function exchangeCode(code) {
-  const body = new URLSearchParams({ grant_type:'authorization_code', code:code, redirect_uri:REDIRECT_URI });
+function pkceChallenge(verifier) {
+  return crypto.createHash('sha256').update(verifier).digest('base64url');
+}
+
+async function exchangeCode(code, verifier) {
+  const body = new URLSearchParams({ grant_type:'authorization_code', code:code, redirect_uri:REDIRECT_URI, client_id:CLIENT_ID, code_verifier:verifier });
   const r = await fetch('https://accounts.spotify.com/api/token', {
     method:'POST',
     headers:{
-      'content-type':'application/x-www-form-urlencoded',
-      'authorization':'Basic ' + Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64')
+      'content-type':'application/x-www-form-urlencoded'
     },
     body:body,
     signal:AbortSignal.timeout(20000)
@@ -86,12 +88,11 @@ async function exchangeCode(code) {
 
 async function refreshAccessToken() {
   if (!token.refresh_token) throw new Error('spotify_not_connected');
-  const body = new URLSearchParams({ grant_type:'refresh_token', refresh_token:token.refresh_token });
+  const body = new URLSearchParams({ grant_type:'refresh_token', refresh_token:token.refresh_token, client_id:CLIENT_ID });
   const r = await fetch('https://accounts.spotify.com/api/token', {
     method:'POST',
     headers:{
-      'content-type':'application/x-www-form-urlencoded',
-      'authorization':'Basic ' + Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64')
+      'content-type':'application/x-www-form-urlencoded'
     },
     body:body,
     signal:AbortSignal.timeout(20000)
@@ -234,8 +235,10 @@ async function handle(req, res, u) {
       return true;
     }
     const state = crypto.randomBytes(18).toString('hex');
-    authStates.set(state, { key:key, expires:Date.now() + 10 * 60 * 1000 });
-    const q = new URLSearchParams({ response_type:'code', client_id:CLIENT_ID, scope:'user-read-playback-state user-modify-playback-state', redirect_uri:REDIRECT_URI, state:state });
+    const verifier = crypto.randomBytes(48).toString('base64url');
+    const challenge = pkceChallenge(verifier);
+    authStates.set(state, { key:key, verifier:verifier, expires:Date.now() + 10 * 60 * 1000 });
+    const q = new URLSearchParams({ response_type:'code', client_id:CLIENT_ID, scope:'user-read-playback-state user-modify-playback-state', redirect_uri:REDIRECT_URI, state:state, code_challenge_method:'S256', code_challenge:challenge });
     res.writeHead(302, { location:'https://accounts.spotify.com/authorize?' + q.toString(), 'cache-control':'no-store' });
     res.end();
     return true;
@@ -255,7 +258,7 @@ async function handle(req, res, u) {
       return true;
     }
     try {
-      await exchangeCode(String(u.searchParams.get('code') || ''));
+      await exchangeCode(String(u.searchParams.get('code') || ''), item.verifier);
       res.writeHead(302, { location:'/spotify-control?key=' + encodeURIComponent(item.key), 'cache-control':'no-store' });
       res.end();
     } catch (e) {
