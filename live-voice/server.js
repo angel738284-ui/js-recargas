@@ -882,6 +882,15 @@ async function processTikTokComment(comment, username, displayName = '') {
   tiktokState.received += 1;
   tiktokState.lastComment = { username, displayName, comment, at: Date.now() };
   broadcast({ type: 'tiktok_comment', username, displayName, comment, at: Date.now() });
+  const onScreenComment = cleanTikTokReaderText(comment);
+  if (onScreenComment) {
+    broadcast({
+      type: 'tiktok_chat_display',
+      name: safeTikTokReaderName(displayName || username) || 'Espectador',
+      comment: onScreenComment,
+      at: Date.now()
+    });
+  }
   enqueueTikTokRead(comment, username, displayName);
 
   if (!tiktokState.autoReply) return;
@@ -2022,6 +2031,9 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a la fuente /comments.</div>
   <button id="copyCommentsUrl">📋 Copiar URL de Verity para PRISM</button>
   <input id="commentsUrl" readonly>
+  <button id="copyChatUrl">📺 Copiar panel visual de comentarios</button>
+  <input id="chatUrl" readonly>
+  <button id="testChat">🧪 Mostrar comentario en pantalla (sin voz)</button>
   <div id="tiktokStatus">TikTok desconectado</div>
   <div id="tiktokStats" class="stats"></div>
   <div id="lastLive">Esperando comentarios…</div>
@@ -2063,11 +2075,42 @@ const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
 const readerTestStatus=document.getElementById('readerTestStatus');
 const copyCommentsUrl=document.getElementById('copyCommentsUrl');
 const commentsUrl=document.getElementById('commentsUrl');
+const copyChatUrl=document.getElementById('copyChatUrl');
+const chatUrl=document.getElementById('chatUrl');
+const testChat=document.getElementById('testChat');
 const tiktokStatus=document.getElementById('tiktokStatus');
 const tiktokStats=document.getElementById('tiktokStats');
 const lastLive=document.getElementById('lastLive');
 let liveState=null;
 commentsUrl.value=location.origin+'/comments';
+chatUrl.value=location.origin+'/chat';
+
+copyChatUrl.onclick=async()=>{
+  try{
+    await navigator.clipboard.writeText(chatUrl.value);
+    readerTestStatus.textContent='✅ URL del chat copiada. Pegala como Fuente web en PRISM.';
+  }catch{
+    chatUrl.focus();
+    chatUrl.select();
+    readerTestStatus.textContent='Seleccioná y copiá la dirección del panel de chat.';
+  }
+};
+
+testChat.onclick=async()=>{
+  testChat.disabled=true;
+  readerTestStatus.textContent='📺 Enviando comentario a la pantalla…';
+  try{
+    const j=await api('/api/tiktok/chat/test',{
+      comment:readerTestComment.value.trim()||'Hola JS, te sigo desde el directo 😎',
+      displayName:readerTestName.value.trim()||'Lucas_FF'
+    });
+    readerTestStatus.textContent='✅ Se mostró en /chat: '+j.name+' · '+j.comment;
+  }catch(e){
+    readerTestStatus.textContent='❌ '+String(e.message||e);
+  }finally{
+    testChat.disabled=false;
+  }
+};
 
 copyCommentsUrl.onclick=async()=>{
   try{
@@ -2306,6 +2349,8 @@ setInterval(refreshTikTok,5000);
 </body>
 </html>`;
 }
+
+const chatPage = require('./chat-overlay');
 
 const jsAvatar = require('./avatar')({
   broadcast,
@@ -2575,6 +2620,14 @@ const server = http.createServer(async (req, res) => {
     return res.end(commentsPage);
   }
 
+  if (req.method === 'GET' && u.pathname === '/chat') {
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store'
+    });
+    return res.end(chatPage);
+  }
+
   if (req.method === 'GET' && u.pathname === '/events') {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -2636,6 +2689,20 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, ...tiktokState, busy: tiktokMiniBusy, readerBusy: tiktokReadBusy });
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e), ...tiktokState });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/chat/test') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const body = await readJson(req);
+      const comment = cleanTikTokReaderText(body.comment || '');
+      if (!comment) return json(res, 422, { ok: false, error: 'Comentario vacío o bloqueado por el filtro.' });
+      const name = safeTikTokReaderName(body.displayName || body.username || '') || 'Espectador';
+      broadcast({ type: 'tiktok_chat_display', name, comment, at: Date.now() });
+      return json(res, 200, { ok: true, name, comment });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
     }
   }
 
