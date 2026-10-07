@@ -715,21 +715,81 @@ function tikTokReplyCooldownMs() {
   return 12000;
 }
 
+const READER_BLOCKED_COMMENT_TERMS = [
+  'puto','puta','putos','putas','pelotudo','pelotuda','pelotudos','pelotudas',
+  'boludo','boluda','boludos','boludas','mierda','concha','pija','verga','pene',
+  'culo','culiado','culiada','pajero','pajera','forro','forra','maricon','marica',
+  'chupapija','chupame','cogeme','coger','garcha','garchar','idiota','imbecil',
+  'estupido','estupida','tarado','tarada','tonto','tonta','gil','salame','mogolico',
+  'mogolica','retrasado','retrasada','hdp','ptm'
+];
+
+const READER_BLOCKED_NAME_TERMS = [
+  ...READER_BLOCKED_COMMENT_TERMS,
+  'gay','sexo','sex','porno','porn','anal','vagina','vaginal','pito','teta','tetas'
+];
+
+const READER_BLOCKED_NAME_SUBSTRINGS = [
+  'pene','pija','verga','porno','porn','vagina','puto','puta','pelotudo','pelotuda',
+  'boludo','boluda','mierda','concha','chupapija','maricon','marica','sexo','sex','gay'
+];
+
+function normalizeReaderModeration(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/0/g,'o')
+    .replace(/1/g,'i')
+    .replace(/3/g,'e')
+    .replace(/4/g,'a')
+    .replace(/5/g,'s')
+    .replace(/7/g,'t')
+    .replace(/([a-z])\1{1,}/g,'$1');
+}
+
+function containsBlockedReaderTerm(value, terms) {
+  const n = normalizeReaderModeration(value);
+  for (const term of terms) {
+    const pattern = '(^|[^a-z0-9])' + term.split('').join('[^a-z0-9]*') + '($|[^a-z0-9])';
+    if (new RegExp(pattern, 'i').test(n)) return true;
+  }
+  return false;
+}
+
 function cleanTikTokReaderText(value) {
-  return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 300);
+  const text = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!text) return '';
+  if (containsBlockedReaderTerm(text, READER_BLOCKED_COMMENT_TERMS)) return '';
+  const useful = text.replace(/[\p{P}\p{S}\s]/gu, '');
+  if (useful.length < 2) return '';
+  return text;
+}
+
+function safeTikTokReaderName(value) {
+  const raw = String(value || '')
+    .replace(/^@/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 50);
+  if (!raw) return '';
+  if (containsBlockedReaderTerm(raw, READER_BLOCKED_NAME_TERMS)) return '';
+  const compact = normalizeReaderModeration(raw).replace(/[^a-z0-9]/g, '');
+  if (READER_BLOCKED_NAME_SUBSTRINGS.some(term => compact.includes(term))) return '';
+  const letters = (raw.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length;
+  const digits = (raw.match(/[0-9]/g) || []).length;
+  if (letters < 2) return '';
+  if (digits > 10 && digits > letters * 2) return '';
+  return raw;
 }
 
 function tikTokReaderSpeech(item) {
   const text = cleanTikTokReaderText(item.comment);
+  if (!text) return '';
   if (!tiktokState.readerIncludeName) return text;
-  const rawName = String(item.displayName || item.username || '')
-    .replace(/^@/, '')
-    .replace(/\\s+/g, ' ')
-    .trim()
-    .slice(0, 50);
+  const rawName = safeTikTokReaderName(item.displayName || item.username || '');
   return rawName ? rawName + ' dice: ' + text : text;
 }
-
 async function makeCommentVoice(text) {
   if (!FISH_COMMENT_API_KEY) throw new Error('fish_comment_api_key_missing');
   const r = await fetch('https://api.fish.audio/v1/tts', {
@@ -2583,7 +2643,14 @@ const server = http.createServer(async (req, res) => {
     if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
       const body = await readJson(req);
-      const comment = cleanTikTokReaderText(body.comment || '');
+      const rawComment = String(body.comment || '').trim();
+      const comment = cleanTikTokReaderText(rawComment);
+      if (rawComment && !comment) {
+        return json(res, 422, {
+          ok: false,
+          error: 'Verity no leería ese comentario: contiene palabras bloqueadas.'
+        });
+      }
       const username = String(body.username || '').trim().slice(0, 80);
       const displayName = String(body.displayName || username || '').trim().slice(0, 80);
       const speechText = comment
