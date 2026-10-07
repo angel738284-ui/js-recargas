@@ -1,4 +1,7 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { URL } = require('url');
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
@@ -15,6 +18,17 @@ const KIE_API_KEY = String(process.env.KIE_API_KEY || '');
 const KIE_MODEL = String(process.env.KIE_MODEL || 'gpt-6-1-sol');
 const clients = new Set();
 const generatedAudio = new Map();
+
+const MUSIC_DIR = process.env.MUSIC_DIR || path.join(os.tmpdir(), 'js-live-music');
+try { fs.mkdirSync(MUSIC_DIR, { recursive: true }); } catch {}
+const musicTracks = new Map();
+let musicState = {
+  trackId: '',
+  playing: false,
+  volume: 0.22,
+  shuffle: false
+};
+
 let lastTestAt = 0;
 let lastBrowserSayAt = 0;
 
@@ -904,6 +918,222 @@ async function makeVoice(text) {
   return audioUrl;
 }
 
+
+function safeMusicName(value) {
+  return String(value || 'cancion')
+    .replace(/[\u0000-\u001f<>:"/\\|?*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || 'cancion';
+}
+
+function musicMimeFromName(name, fallback = '') {
+  const ext = path.extname(String(name || '')).toLowerCase();
+  if (ext === '.mp3') return 'audio/mpeg';
+  if (ext === '.m4a' || ext === '.mp4') return 'audio/mp4';
+  if (ext === '.ogg' || ext === '.opus') return 'audio/ogg';
+  if (ext === '.wav') return 'audio/wav';
+  return String(fallback || 'application/octet-stream').split(';')[0];
+}
+
+function musicPublicState() {
+  const track = musicTracks.get(musicState.trackId);
+  return {
+    ...musicState,
+    track: track ? {
+      id: track.id,
+      name: track.name,
+      url: '/music-file/' + encodeURIComponent(track.id)
+    } : null
+  };
+}
+
+function musicFullState() {
+  return {
+    ...musicPublicState(),
+    tracks: [...musicTracks.values()].map(t => ({
+      id: t.id,
+      name: t.name,
+      size: t.size
+    }))
+  };
+}
+
+function broadcastMusicState() {
+  broadcast({ type: 'music_state', ...musicPublicState(), at: Date.now() });
+}
+
+function pickNextTrack(direction = 1) {
+  const ids = [...musicTracks.keys()];
+  if (!ids.length) {
+    musicState.trackId = '';
+    musicState.playing = false;
+    return;
+  }
+  if (musicState.shuffle && ids.length > 1) {
+    let next = musicState.trackId;
+    while (next === musicState.trackId) next = ids[Math.floor(Math.random() * ids.length)];
+    musicState.trackId = next;
+    return;
+  }
+  let i = ids.indexOf(musicState.trackId);
+  if (i < 0) i = direction > 0 ? -1 : 0;
+  i = (i + direction + ids.length) % ids.length;
+  musicState.trackId = ids[i];
+}
+
+function makeMusicPage() {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body{margin:0;background:transparent;overflow:hidden}audio{display:none}</style>
+</head>
+<body>
+<audio id="music" playsinline></audio>
+<script>
+const a=document.getElementById('music');
+let current='';
+async function apply(s){
+  const t=s&&s.track;
+  a.volume=Math.max(0,Math.min(1,Number(s&&s.volume)||0));
+  if(t&&t.url){
+    if(current!==t.id){current=t.id;a.src=t.url;}
+    if(s.playing){try{await a.play();}catch{}}
+    else a.pause();
+  }else{a.pause();current='';a.removeAttribute('src');}
+}
+fetch('/api/music/public-state',{cache:'no-store'}).then(r=>r.json()).then(apply).catch(()=>{});
+const ev=new EventSource('/events');
+ev.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='music_state')apply(m);}catch{}};
+a.onended=()=>fetch('/api/music/ended',{method:'POST'}).catch(()=>{});
+setInterval(()=>fetch('/keepalive',{cache:'no-store'}).catch(()=>{}),120000);
+</script>
+</body>
+</html>`;
+}
+
+function makeMusicControlPage(key) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JS Music</title>
+<style>
+body{margin:0;background:#101010;color:#fff;font-family:system-ui;padding:16px}
+.card{max-width:620px;margin:0 auto 14px;background:#1b1b1b;border-radius:18px;padding:16px}
+h2{margin:0 0 8px}
+p{opacity:.78;line-height:1.4}
+button,.pick{width:100%;box-sizing:border-box;border:0;border-radius:13px;padding:14px;font-size:16px;font-weight:800;margin-top:9px;background:#fff;color:#111;text-align:center}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+input[type=file]{display:none}
+input[type=range]{width:100%}
+.track{display:flex;gap:8px;align-items:center;background:#262626;border-radius:12px;padding:10px;margin-top:8px}
+.track button{margin:0;padding:10px;font-size:14px}
+.name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.small{opacity:.65;font-size:13px;margin-top:9px}
+.on{background:#78e386!important}
+.danger{background:#4a2424!important;color:#fff!important}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>🎵 JS Music</h2>
+<p>Subí tus archivos de audio desde este celular. La música sale por la fuente web de PRISM, no por el parlante del controlador.</p>
+<label class="pick" for="files">⬆️ Subir música</label>
+<input id="files" type="file" multiple accept=".mp3,.m4a,.ogg,.opus,.wav,audio/*">
+<div id="uploadStatus" class="small"></div>
+</div>
+<div class="card">
+<div id="now">Sin canción seleccionada</div>
+<div class="row">
+<button id="prev">⏮️ Anterior</button>
+<button id="next">⏭️ Siguiente</button>
+</div>
+<button id="play">▶️ Reproducir</button>
+<button id="shuffle">🔀 Aleatorio: OFF</button>
+<p>Volumen del directo: <b id="volText">22%</b></p>
+<input id="volume" type="range" min="0" max="100" value="22">
+<div class="small">Después agregá <b>/music</b> como segunda fuente web en PRISM.</div>
+</div>
+<div class="card">
+<h2>Playlist</h2>
+<div id="list">Todavía no subiste música.</div>
+</div>
+<script>
+const KEY=${JSON.stringify(key)};
+const files=document.getElementById('files');
+const uploadStatus=document.getElementById('uploadStatus');
+const list=document.getElementById('list');
+const now=document.getElementById('now');
+const play=document.getElementById('play');
+const prev=document.getElementById('prev');
+const next=document.getElementById('next');
+const shuffle=document.getElementById('shuffle');
+const volume=document.getElementById('volume');
+const volText=document.getElementById('volText');
+let state=null;
+
+async function api(url,opt={}){
+  opt.headers={...(opt.headers||{}),authorization:'Bearer '+KEY};
+  const r=await fetch(url,opt);
+  const j=await r.json();
+  if(!r.ok)throw new Error(j.error||'request_failed');
+  return j;
+}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function render(j){
+  state=j;
+  const t=j.track;
+  now.textContent=t?'🎵 '+t.name:'Sin canción seleccionada';
+  play.textContent=j.playing?'⏸️ Pausar':'▶️ Reproducir';
+  shuffle.textContent='🔀 Aleatorio: '+(j.shuffle?'ON':'OFF');
+  shuffle.classList.toggle('on',!!j.shuffle);
+  const v=Math.round((Number(j.volume)||0)*100);
+  volume.value=v;volText.textContent=v+'%';
+  if(!j.tracks||!j.tracks.length){list.textContent='Todavía no subiste música.';return;}
+  list.innerHTML=j.tracks.map(x=>'<div class="track"><div class="name">'+esc(x.name)+'</div><button data-play="'+x.id+'">▶️</button><button class="danger" data-del="'+x.id+'">🗑️</button></div>').join('');
+  list.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>control('select',{trackId:b.dataset.play,playing:true}));
+  list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>control('delete',{trackId:b.dataset.del}));
+}
+async function refresh(){try{render(await api('/api/music/state'));}catch(e){uploadStatus.textContent=String(e.message||e);}}
+async function control(action,extra={}){
+  try{render(await api('/api/music/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...extra})}));}
+  catch(e){uploadStatus.textContent='Error: '+String(e.message||e);}
+}
+files.onchange=async()=>{
+  const arr=[...files.files];
+  if(!arr.length)return;
+  for(let i=0;i<arr.length;i++){
+    const f=arr[i];
+    uploadStatus.textContent='Subiendo '+(i+1)+'/'+arr.length+': '+f.name;
+    try{
+      await api('/api/music/upload?name='+encodeURIComponent(f.name),{
+        method:'POST',
+        headers:{'content-type':f.type||'application/octet-stream','x-file-size':String(f.size)},
+        body:f
+      });
+    }catch(e){uploadStatus.textContent='Error con '+f.name+': '+String(e.message||e);return;}
+  }
+  files.value='';
+  uploadStatus.textContent='✅ Música subida';
+  refresh();
+};
+play.onclick=()=>control(state&&state.playing?'pause':'play');
+prev.onclick=()=>control('prev');
+next.onclick=()=>control('next');
+shuffle.onclick=()=>control('shuffle',{enabled:!(state&&state.shuffle)});
+volume.oninput=()=>{volText.textContent=volume.value+'%';};
+volume.onchange=()=>control('volume',{volume:Number(volume.value)/100});
+refresh();
+setInterval(refresh,5000);
+</script>
+</body>
+</html>`;
+}
+
 const prismPage = `<!doctype html>
 <html>
 <head>
@@ -1100,6 +1330,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
 #status{margin-top:14px;font-weight:700}
 #heard{margin-top:12px;line-height:1.4;min-height:48px}
 .small{opacity:.75;font-size:13px;margin-top:10px}
+.link{display:block;text-decoration:none;text-align:center;background:#202b42;color:#fff;border-radius:14px;padding:15px;font-size:17px;font-weight:800;margin-top:12px}
 </style>
 </head>
 <body>
@@ -1109,6 +1340,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <button id="start">🟢 Iniciar micrófono AUTO</button>
   <button id="stop">🔴 Detener</button>
   <button id="monitor">🔇 Escuchar en este celular: OFF</button>
+  <a class="link" href="/music-control?key=${encodeURIComponent(key)}">🎵 Abrir JS Music</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
   <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
@@ -1674,6 +1906,169 @@ const server = http.createServer(async (req, res) => {
       'referrer-policy': 'no-referrer'
     });
     return res.end(makeMiniJsControlPage(key));
+  }
+
+
+  if (req.method === 'GET' && u.pathname === '/music-control') {
+    const key = String(u.searchParams.get('key') || '');
+    if (!CONTROLLER_KEY || key !== CONTROLLER_KEY) {
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer'
+    });
+    return res.end(makeMusicControlPage(key));
+  }
+
+  if (req.method === 'GET' && u.pathname === '/music') {
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store'
+    });
+    return res.end(makeMusicPage());
+  }
+
+  if (req.method === 'GET' && u.pathname === '/api/music/public-state') {
+    return json(res, 200, { ok: true, ...musicPublicState() });
+  }
+
+  if (req.method === 'GET' && u.pathname === '/api/music/state') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    return json(res, 200, { ok: true, ...musicFullState() });
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/music/upload') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const originalName = safeMusicName(u.searchParams.get('name') || 'cancion.mp3');
+      const mime = musicMimeFromName(originalName, req.headers['content-type']);
+      if (!['audio/mpeg','audio/mp4','audio/ogg','audio/wav'].includes(mime)) {
+        return json(res, 415, { ok: false, error: 'Formato no compatible. Usá MP3, M4A, OGG/OPUS o WAV.' });
+      }
+
+      const declaredSize = Number(req.headers['x-file-size'] || req.headers['content-length'] || 0);
+      if (declaredSize > 40 * 1024 * 1024) {
+        return json(res, 413, { ok: false, error: 'Archivo demasiado grande. Máximo 40 MB por canción.' });
+      }
+
+      const buf = await readBuffer(req, 40 * 1024 * 1024);
+      if (buf.length < 1024) return json(res, 400, { ok: false, error: 'audio_too_small' });
+
+      const ext = path.extname(originalName).toLowerCase() || (mime === 'audio/mpeg' ? '.mp3' : '');
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2,10);
+      const diskPath = path.join(MUSIC_DIR, id + ext);
+      fs.writeFileSync(diskPath, buf);
+
+      musicTracks.set(id, {
+        id,
+        name: originalName,
+        mime,
+        size: buf.length,
+        path: diskPath,
+        addedAt: Date.now()
+      });
+
+      if (!musicState.trackId) musicState.trackId = id;
+      broadcastMusicState();
+      return json(res, 200, { ok: true, ...musicFullState() });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/music/control') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const body = await readJson(req);
+      const action = String(body.action || '');
+
+      if (action === 'play') {
+        if (!musicState.trackId) pickNextTrack(1);
+        musicState.playing = Boolean(musicState.trackId);
+      } else if (action === 'pause') {
+        musicState.playing = false;
+      } else if (action === 'next') {
+        pickNextTrack(1);
+        musicState.playing = Boolean(musicState.trackId);
+      } else if (action === 'prev') {
+        pickNextTrack(-1);
+        musicState.playing = Boolean(musicState.trackId);
+      } else if (action === 'select') {
+        const id = String(body.trackId || '');
+        if (!musicTracks.has(id)) return json(res, 404, { ok: false, error: 'track_not_found' });
+        musicState.trackId = id;
+        musicState.playing = body.playing !== false;
+      } else if (action === 'volume') {
+        musicState.volume = Math.max(0, Math.min(1, Number(body.volume) || 0));
+      } else if (action === 'shuffle') {
+        musicState.shuffle = Boolean(body.enabled);
+      } else if (action === 'delete') {
+        const id = String(body.trackId || '');
+        const track = musicTracks.get(id);
+        if (track) {
+          try { fs.unlinkSync(track.path); } catch {}
+          musicTracks.delete(id);
+          if (musicState.trackId === id) {
+            musicState.trackId = '';
+            musicState.playing = false;
+            pickNextTrack(1);
+          }
+        }
+      } else {
+        return json(res, 400, { ok: false, error: 'unknown_music_action' });
+      }
+
+      broadcastMusicState();
+      return json(res, 200, { ok: true, ...musicFullState() });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/music/ended') {
+    pickNextTrack(1);
+    musicState.playing = Boolean(musicState.trackId);
+    broadcastMusicState();
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.method === 'GET' && u.pathname.startsWith('/music-file/')) {
+    const id = decodeURIComponent(u.pathname.slice('/music-file/'.length));
+    const track = musicTracks.get(id);
+    if (!track || !fs.existsSync(track.path)) {
+      res.writeHead(404);
+      return res.end();
+    }
+
+    const stat = fs.statSync(track.path);
+    const range = String(req.headers.range || '');
+    if (range) {
+      const m = range.match(/bytes=(\d*)-(\d*)/);
+      if (m) {
+        let start = m[1] ? Number(m[1]) : 0;
+        let end = m[2] ? Number(m[2]) : stat.size - 1;
+        start = Math.max(0, Math.min(start, stat.size - 1));
+        end = Math.max(start, Math.min(end, stat.size - 1));
+        res.writeHead(206, {
+          'content-type': track.mime,
+          'content-length': end - start + 1,
+          'content-range': 'bytes ' + start + '-' + end + '/' + stat.size,
+          'accept-ranges': 'bytes',
+          'cache-control': 'private, max-age=3600'
+        });
+        return fs.createReadStream(track.path, { start, end }).pipe(res);
+      }
+    }
+
+    res.writeHead(200, {
+      'content-type': track.mime,
+      'content-length': stat.size,
+      'accept-ranges': 'bytes',
+      'cache-control': 'private, max-age=3600'
+    });
+    return fs.createReadStream(track.path).pipe(res);
   }
 
   if (req.method === 'GET' && u.pathname === '/prism') {
