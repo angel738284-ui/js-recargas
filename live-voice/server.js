@@ -1519,6 +1519,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <button id="monitor">🔇 Escuchar en este celular: OFF</button>
   <a class="link" href="/music-control?key=${encodeURIComponent(key)}">🎵 Abrir JS Music</a>
   <a class="link" href="/avatar-control?key=${encodeURIComponent(key)}">🎭 Controlar avatar JS</a>
+  <a class="link" href="/mini-js-control?key=${encodeURIComponent(key)}">💬 TikTok + Verity</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
   <div class="small">Modo rápido: envía la frase tras ~0,45 s de silencio. El micrófono se pausa mientras habla JS para evitar eco.</div>
