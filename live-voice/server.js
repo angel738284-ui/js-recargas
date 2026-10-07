@@ -1756,7 +1756,7 @@ button{width:100%;border:0;border-radius:14px;padding:16px;font-size:18px;font-w
   <a class="link" href="/mini-js-control?key=${encodeURIComponent(key)}">💬 TikTok + Verity</a>
   <div id="status">Detenido</div>
   <div id="heard"></div>
-  <div class="small">AUTO clona tu voz como siempre. “Hablar normal” manda tu voz real desde este celular a /avatar en PRISM, mueve la boca de JS y pausa las voces automáticas. Para escucharte también en este celular, activá “Escuchar” (mejor con auriculares para evitar eco).</div>
+  <div class="small">AUTO ahora usa detección estricta de voz: ignora ruido/eco, exige voz continua antes de grabar y bloquea el micrófono un instante después de que JS habla. “Hablar normal” manda tu voz real a /avatar en PRISM.</div>
 </div>
 <audio id="audio" playsinline></audio>
 <audio id="humanMonitor" playsinline></audio>
@@ -1783,9 +1783,15 @@ let speechActive=false;
 let busy=false;
 let silenceSince=0;
 let phraseStarted=0;
-let threshold=0.026;
+let threshold=0.032;
 let noiseFloor=0.008;
 let calibratingUntil=0;
+let voiceCandidateSince=0;
+let phraseVoiceMs=0;
+let lastVadAt=0;
+let pendingPhraseAccepted=true;
+let postSpeakUntil=0;
+let freqArray=null;
 let monitorLocal=false;
 let humanMode=false;
 let humanRaf=0;
@@ -1833,6 +1839,21 @@ function rmsLevel(){
   return Math.sqrt(sum/dataArray.length);
 }
 
+function voiceBandRatio(){
+  if(!analyser||!freqArray||!ctx)return 0;
+  analyser.getByteFrequencyData(freqArray);
+  const nyquist=(ctx.sampleRate||48000)/2;
+  let voice=0,total=0;
+  for(let i=1;i<freqArray.length;i++){
+    const hz=i*nyquist/freqArray.length;
+    if(hz<60||hz>8000)continue;
+    const e=freqArray[i]*freqArray[i];
+    total+=e;
+    if(hz>=90&&hz<=3600)voice+=e;
+  }
+  return total>0?voice/total:0;
+}
+
 function bestMime(){
   const types=[
     'audio/webm;codecs=opus',
@@ -1848,6 +1869,9 @@ function bestMime(){
 function beginPhrase(){
   if(!autoMode||busy||speechActive||!stream)return;
   chunks=[];
+  phraseVoiceMs=0;
+  lastVadAt=Date.now();
+  pendingPhraseAccepted=true;
   const mime=bestMime();
   try{
     recorder=mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
@@ -1869,14 +1893,18 @@ function finishPhrase(){
   if(!speechActive)return;
   speechActive=false;
   silenceSince=0;
+  pendingPhraseAccepted=phraseVoiceMs>=280;
+  voiceCandidateSince=0;
   try{
     if(recorder&&recorder.state!=='inactive')recorder.stop();
   }catch{}
 }
 
 async function sendRecordedPhrase(){
-  if(!autoMode||!chunks.length){
+  if(!autoMode||!chunks.length||!pendingPhraseAccepted){
     chunks=[];
+    pendingPhraseAccepted=true;
+    if(autoMode)statusEl.textContent='🎙️ Esperando tu voz…';
     return;
   }
   const type=(chunks[0]&&chunks[0].type)||'audio/webm';
@@ -1928,30 +1956,41 @@ function vadLoop(){
   if(!autoMode||!analyser)return;
 
   const rms=rmsLevel();
+  const ratio=voiceBandRatio();
   const now=Date.now();
 
-  if(now<calibratingUntil && !speechActive){
-    noiseFloor=noiseFloor*0.9+rms*0.1;
-    threshold=Math.max(0.012,noiseFloor*2.0);
+  if(now<calibratingUntil&&!speechActive){
+    noiseFloor=noiseFloor*0.90+rms*0.10;
+    threshold=Math.max(0.028,noiseFloor*2.8);
   }
 
-  if(!busy){
+  const voiceLike=rms>threshold&&ratio>=0.56;
+
+  if(!busy&&now>=postSpeakUntil){
     if(!speechActive){
-      if(now>=calibratingUntil && rms>threshold){
-        beginPhrase();
+      if(now>=calibratingUntil&&voiceLike){
+        if(!voiceCandidateSince)voiceCandidateSince=now;
+        if(now-voiceCandidateSince>=180)beginPhrase();
+      }else{
+        voiceCandidateSince=0;
       }
     }else{
-      if(rms>threshold*0.82){
+      const dt=lastVadAt?Math.min(80,now-lastVadAt):0;
+      if(voiceLike){
+        phraseVoiceMs+=dt;
         silenceSince=0;
       }else{
         if(!silenceSince)silenceSince=now;
-        if(now-silenceSince>450)finishPhrase();
+        if(now-silenceSince>520)finishPhrase();
       }
 
       if(now-phraseStarted>14000)finishPhrase();
     }
+  }else if(!speechActive){
+    voiceCandidateSince=0;
   }
 
+  lastVadAt=now;
   raf=requestAnimationFrame(vadLoop);
 }
 
@@ -1974,9 +2013,10 @@ async function ensureMic(){
   micSource=ctx.createMediaStreamSource(stream);
   analyser=ctx.createAnalyser();
   analyser.fftSize=1024;
-  analyser.smoothingTimeConstant=0.15;
+  analyser.smoothingTimeConstant=0.12;
   micSource.connect(analyser);
   dataArray=new Uint8Array(analyser.fftSize);
+  freqArray=new Uint8Array(analyser.frequencyBinCount);
   return true;
 }
 
@@ -2000,6 +2040,7 @@ function closeMic(){
   ctx=null;
   analyser=null;
   dataArray=null;
+  freqArray=null;
 }
 
 async function startAuto(){
@@ -2012,10 +2053,15 @@ async function startAuto(){
   autoMode=true;
   busy=false;
   speechActive=false;
-  noiseFloor=0.006;
-  threshold=0.016;
-  calibratingUntil=Date.now()+500;
-  statusEl.textContent='🎙️ Calibrando ruido… hablá en un segundo';
+  noiseFloor=0.007;
+  threshold=0.032;
+  voiceCandidateSince=0;
+  phraseVoiceMs=0;
+  lastVadAt=0;
+  pendingPhraseAccepted=true;
+  postSpeakUntil=0;
+  calibratingUntil=Date.now()+800;
+  statusEl.textContent='🎙️ Calibrando ruido… esperá un segundo y después hablá';
   vadLoop();
 }
 
@@ -2186,12 +2232,16 @@ events.onmessage=async(ev)=>{
       await audio.play();
       audio.onended=()=>{
         busy=false;
-        statusEl.textContent=autoMode?'🎙️ Escuchando…':'Detenido';
+        postSpeakUntil=Date.now()+1100;
+        voiceCandidateSince=0;
+        statusEl.textContent=autoMode?'🎙️ Esperando tu voz…':'Detenido';
       };
     }
   }catch{
     busy=false;
-    if(autoMode)statusEl.textContent='🎙️ Escuchando…';
+    postSpeakUntil=Date.now()+900;
+    voiceCandidateSince=0;
+    if(autoMode)statusEl.textContent='🎙️ Esperando tu voz…';
   }
 };
 
