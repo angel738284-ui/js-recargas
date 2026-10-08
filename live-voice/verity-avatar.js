@@ -94,7 +94,7 @@ function detectMood(m){
  const animation=String((m&&m.animation)||'').toLowerCase();
  const insults=/(bolud|pendej|tont|manco|salame|pelotud|idiot|imbecil|estupid|forr|puta|puto|mierda)/i;
  const targets=/(verity|verety|mascota|\bjs\b)/i;
- if((insults.test(comment)&&targets.test(comment))||emotion==='serio'||animation==='shake')return 'angry';
+ if(((m&&m.source)==='verity-tiktok-reply'&&insults.test(comment)&&targets.test(comment))||emotion==='serio'||animation==='shake')return 'angry';
  if(/(loc[oa]|wtf|demencia|caos|😡|🤬|malvad|miedo|terror)/i.test(text))return 'crazy';
  if(emotion==='burlon'||emotion==='divertido'||animation==='laugh'||animation==='smirk')return 'grin';
  if(/(jaj|jeje|jiji|xd|😂|🤣|💀|lol)/i.test(text))return 'grin';
