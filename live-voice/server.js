@@ -1307,7 +1307,8 @@ async function processTikTokGift({username='', displayName='', giftName='Regalo'
     (count > 1 ? (count + ' ' + safeGift) : safeGift) +
     (diamonds > 0 ? (' (' + diamonds + ' diamantes cada uno)') : '') +
     '. TENÉS QUE AGRADECERLE SIEMPRE. ' +
-    'Decí su nombre una vez. Hacé un agradecimiento corto, natural, personalizado y con personalidad de Verity. ' +
+    'Respondé con UNA SOLA FRASE de 6 a 12 palabras, sin segunda oración, sin preguntas y sin explicación. ' +
+    'Decí su nombre una vez. Hacé un agradecimiento natural, personalizado y con personalidad de Verity. ' +
     'No confundas a ' + spokenName + ' con JS. Si el regalo es grande o son muchos, mostrate más emocionado.';
 
   let thought;
@@ -1323,6 +1324,12 @@ async function processTikTokGift({username='', displayName='', giftName='Regalo'
   }
 
   let reply = String(thought?.reply || '').trim();
+  if (reply) {
+    const first = reply.match(/^[^.!?]+[.!?]?/);
+    if (first) reply = first[0].trim();
+    const words = reply.split(/\s+/);
+    if (words.length > 14) reply = words.slice(0,14).join(' ') + '.';
+  }
   if (!reply) {
     reply = spokenName + ', gracias por ' + (count>1 ? ('esos ' + count + ' ' + safeGift) : ('ese ' + safeGift)) + ', máquina.';
   }
