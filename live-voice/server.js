@@ -67,7 +67,6 @@ const tiktokSeen = new Map();
 const tiktokUserLastReply = new Map();
 const verityLiveMemory = new Map();
 const tiktokReadQueue = [];
-let verityThinkingSounds = [];
 
 async function initVerityDb() {
   if (!verityDb) return;
@@ -1112,42 +1111,6 @@ async function makeCommentVoice(text, options = {}) {
   return '/audio/' + id + '.mp3';
 }
 
-async function prepareVerityThinkingSounds() {
-  if (!FISH_COMMENT_API_KEY || verityThinkingSounds.length) return;
-  const phrases = [
-    'Mmm... hmm hmm...',
-    'Hmm... a ver...',
-    'Mmm... dejame pensar...',
-    'Hmm hmm... ya va...'
-  ];
-  const urls = [];
-  for (const phrase of phrases) {
-    try {
-      urls.push(await makeCommentVoice(phrase, { cacheLong:true }));
-    } catch {}
-  }
-  verityThinkingSounds = urls;
-  console.log('Verity thinking sounds ready:', verityThinkingSounds.length);
-}
-
-function broadcastVerityThinking(comment='', username='') {
-  if (!verityThinkingSounds.length) return;
-  const url = verityThinkingSounds[Math.floor(Math.random()*verityThinkingSounds.length)];
-  broadcast({
-    type:'audio',
-    url,
-    text:'mmm',
-    spoken_text:'mmm',
-    source:'verity-thinking',
-    voice:'verity',
-    emotion:'normal',
-    animation:'idle',
-    username,
-    comment,
-    at:Date.now()
-  });
-}
-
 async function drainTikTokReadQueue() {
   if (tiktokReadBusy) return;
   tiktokReadBusy = true;
@@ -1251,7 +1214,6 @@ async function processTikTokComment(comment, username, displayName = '') {
   tiktokState.selected += 1;
 
   try {
-    broadcastVerityThinking(comment, username);
     let thought;
     try {
       thought = await miniJsThink(comment, username, displayName);
@@ -3859,7 +3821,6 @@ async function diagnoseLiveProvidersOnce() {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('JS Live Voice listening on', PORT);
-  prepareVerityThinkingSounds().catch(e=>console.error('Verity thinking sound init error:', String(e?.message||e)));
   initVerityDb()
     .then(()=>console.log(DATABASE_URL ? 'Verity persistent memory ready' : 'Verity persistent memory disabled: DATABASE_URL missing'))
     .catch(e=>console.error('Verity DB init error:', String(e?.message||e)));
