@@ -635,7 +635,7 @@ function verityMemoryText(username='') {
   return bits.join('\n')||'Sin memoria previa de este usuario en este LIVE.';
 }
 
-async function miniJsThink(comment, username = '', displayName = '') {
+async function miniJsThink(comment, username = '', displayName = '', options = {}) {
   if (!KIE_API_KEY && !GEMINI_API_KEY) {
     throw new Error('mini_js_brain_key_missing');
   }
@@ -659,6 +659,10 @@ async function miniJsThink(comment, username = '', displayName = '') {
     [429, 500, 502, 503, 504].includes(Number(e?.status));
 
   const requestKie = async (model) => {
+    const fastInstruction =
+      '\n\nMODO STREAMING LIVE: no devuelvas JSON. Respondé SOLO con la frase exacta que Verity dirá. ' +
+      'Si no conviene responder, escribí exactamente __NO_REPLY__. Mantené la personalidad y el contexto.';
+
     const r = await fetch('https://api.kie.ai/codex/v1/responses', {
       method: 'POST',
       headers: {
@@ -667,47 +671,78 @@ async function miniJsThink(comment, username = '', displayName = '') {
       },
       body: JSON.stringify({
         model,
-        stream: false,
+        stream: true,
         input: [{
           role: 'user',
           content: [{
             type: 'input_text',
-            text: MINI_JS_SYSTEM + '\n\nENTRADA DEL LIVE:\n' + userText
+            text: MINI_JS_SYSTEM + fastInstruction + '\n\nENTRADA DEL LIVE:\n' + userText
           }]
         }],
         reasoning: { effort: 'low' }
       }),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(7000)
     });
 
-    const raw = await r.text();
-    let data;
-    try { data = JSON.parse(raw); }
-    catch {
-      const err = new Error('kie_bad_json');
-      err.status = r.status;
-      throw err;
-    }
-
     if (!r.ok) {
-      const err = new Error(
-        'kie_http_' + r.status + ': ' +
-        String(data?.error?.message || data?.message || raw).slice(0, 300)
-      );
+      const raw = await r.text();
+      const err = new Error('kie_http_' + r.status + ': ' + raw.slice(0, 300));
       err.status = r.status;
       throw err;
     }
 
-    const output = (data?.output || [])
-      .filter(item => item?.type === 'message')
-      .flatMap(item => item?.content || [])
-      .filter(part => part?.type === 'output_text')
-      .map(part => part?.text || '')
-      .join('')
-      .trim();
+    const reader = r.body?.getReader();
+    if (!reader) throw new Error('kie_stream_missing');
 
+    const decoder = new TextDecoder();
+    let pending = '';
+    let output = '';
+
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      pending += decoder.decode(part.value, { stream: true });
+
+      const lines = pending.split('\n');
+      pending = lines.pop() || '';
+
+      for (const lineRaw of lines) {
+        const line = lineRaw.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+
+        let event;
+        try { event = JSON.parse(payload); } catch { continue; }
+
+        if (event?.code || event?.error) {
+          const err = new Error('kie_stream_error: ' + String(event?.msg || event?.error?.message || 'unknown').slice(0, 240));
+          err.status = Number(event?.code) || 500;
+          throw err;
+        }
+
+        if (event?.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+          output += event.delta;
+        }
+      }
+    }
+
+    output = output.trim();
     if (!output) throw new Error('kie_empty_response');
-    return { ...parseMiniJsJson(output), model, provider: 'kie' };
+    if (output === '__NO_REPLY__') {
+      return { should_reply:false, reply:'', emotion:'normal', animation:'idle', priority:1, model, provider:'kie-stream' };
+    }
+
+    const hostile = isHostileToVerityOrJs(safeComment);
+    return {
+      should_reply: true,
+      reply: output.slice(0,220),
+      emotion: hostile ? 'serio' : 'normal',
+      animation: hostile ? 'shake' : 'idle',
+      priority: hostile ? 5 : 2,
+      model,
+      provider: 'kie-stream'
+    };
   };
 
   const requestGemini = async (model) => {
