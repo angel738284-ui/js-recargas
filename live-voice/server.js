@@ -2235,6 +2235,9 @@ let micSource=null;
 let captureNode=null;
 let captureSink=null;
 let humanPcmQueue=[];
+let verityWakeRecognition=null;
+let verityWakeBusy=false;
+let verityWakeLastAt=0;
 
 monitorBtn.onclick=()=>{
   monitorLocal=!monitorLocal;
@@ -2607,6 +2610,65 @@ function humanLoop(){
   humanRaf=requestAnimationFrame(humanLoop);
 }
 
+function startVerityWake(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR||verityWakeRecognition)return;
+  try{
+    const rec=new SR();
+    rec.lang='es-AR';
+    rec.continuous=true;
+    rec.interimResults=false;
+    rec.maxAlternatives=1;
+    rec.onresult=async(e)=>{
+      if(!humanMode||verityWakeBusy)return;
+      let text='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        if(e.results[i].isFinal)text+=(e.results[i][0].transcript||'')+' ';
+      }
+      text=text.trim();
+      if(!text)return;
+      const m=text.match(/\b(verity|verety|vereti|veriti)\b[,:;]?\s*(.*)$/i);
+      if(!m)return;
+      const now=Date.now();
+      if(now-verityWakeLastAt<3500)return;
+      verityWakeLastAt=now;
+      verityWakeBusy=true;
+      heardEl.textContent='Le dijiste a Verity: “'+text+'”';
+      statusEl.textContent='🤖 Verity pensando…';
+      try{
+        const r=await fetch('/api/verity/js-ask',{
+          method:'POST',
+          headers:{'content-type':'application/json','authorization':'Bearer '+KEY},
+          body:JSON.stringify({text})
+        });
+        const j=await r.json();
+        if(!r.ok)throw new Error(j.error||'verity_ask_failed');
+        heardEl.textContent='Verity: “'+j.reply+'”';
+        statusEl.textContent='🎙️ Hablar normal activo · Verity respondió';
+      }catch(err){
+        statusEl.textContent='No pude preguntarle a Verity';
+        heardEl.textContent=String(err.message||err);
+      }finally{
+        verityWakeBusy=false;
+      }
+    };
+    rec.onend=()=>{
+      verityWakeRecognition=null;
+      if(humanMode)setTimeout(startVerityWake,450);
+    };
+    rec.onerror=()=>{};
+    rec.start();
+    verityWakeRecognition=rec;
+  }catch{}
+}
+
+function stopVerityWake(){
+  const rec=verityWakeRecognition;
+  verityWakeRecognition=null;
+  if(rec){try{rec.stop();}catch{}}
+  verityWakeBusy=false;
+}
+
 async function startHumanTalk(){
   if(humanMode)return;
   if(autoMode)stopAuto();
@@ -2623,6 +2685,7 @@ async function startHumanTalk(){
   humanMonitor.muted=!monitorLocal;
   if(monitorLocal)humanMonitor.play().catch(()=>{});
   startHumanCapture();
+  startVerityWake();
   humanTalkBtn.classList.add('on');
   humanTalkBtn.textContent='🎙️ Hablar normal: ON';
   heardEl.textContent='Tu voz real se está enviando a /avatar en PRISM. Activá “Escuchar” si querés oírla también en este celular.';
@@ -2636,6 +2699,7 @@ function stopHumanTalk(){
   if(humanRaf)cancelAnimationFrame(humanRaf);
   humanRaf=0;
   humanCurrentLevel=0;
+  stopVerityWake();
   stopHumanCapture();
   humanMonitor.pause();
   try{humanMonitor.srcObject=null;}catch{}
@@ -3758,6 +3822,56 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/verity/js-ask') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok:false, error:'unauthorized' });
+    try {
+      const body = await readJson(req);
+      const text = String(body.text || '').trim().slice(0,300);
+      if (!/\b(verity|verety|vereti|veriti)\b/i.test(text)) {
+        return json(res, 400, { ok:false, error:'verity_name_required' });
+      }
+
+      const directPrompt =
+        'MENSAJE HABLADO DIRECTAMENTE POR JS, TU AMO/HUMANO. ' +
+        'TENÉS QUE RESPONDERLE SIEMPRE COMO VERITY. ' +
+        'Contestá exactamente lo que JS te pregunta o te dice, de forma corta y natural. ' +
+        'No digas que sos JS. Mensaje de JS: ' + text;
+
+      let thought;
+      try {
+        thought = await miniJsThink(directPrompt, 'JS', 'JS');
+      } catch {
+        thought = { should_reply:true, reply:'Decime, JS, acá estoy.', emotion:'normal', animation:'idle', model:'js-direct-fallback' };
+      }
+
+      let reply = String(thought?.reply || '').trim();
+      if (!reply || thought?.should_reply === false) reply = 'Decime, JS, acá estoy.';
+      const speechText = sanitizeMiniJsSpeech(reply);
+      const audioUrl = await makeCommentVoice(speechText);
+      const at = Date.now();
+
+      broadcast({
+        type:'audio',
+        url:audioUrl,
+        text:reply,
+        spoken_text:speechText,
+        source:'verity-tiktok-reply',
+        voice:'verity',
+        emotion:thought?.emotion || 'normal',
+        animation:thought?.animation || 'idle',
+        username:'JS',
+        displayName:'JS',
+        comment:text,
+        direct_from_js:true,
+        at
+      });
+
+      return json(res, 200, { ok:true, reply, audio_url:audioUrl, model:thought?.model || KIE_MODEL });
+    } catch (e) {
+      return json(res, 500, { ok:false, error:String(e?.message||e) });
     }
   }
 
