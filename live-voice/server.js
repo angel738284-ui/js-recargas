@@ -936,17 +936,19 @@ function tikTokReaderSpeech(item) {
   const rawName = safeTikTokReaderName(item.displayName || item.username || '');
   return rawName ? rawName + ' dice: ' + text : text;
 }
-async function makeCommentVoice(text) {
+async function makeCommentVoice(text, options = {}) {
   if (!FISH_COMMENT_API_KEY) throw new Error('fish_comment_api_key_missing');
+  const model = String(options.model || 's2.1-pro-free');
+  const directedText = options.direction ? ('[' + String(options.direction).slice(0,120) + '] ' + text) : text;
   const r = await fetch('https://api.fish.audio/v1/tts', {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + FISH_COMMENT_API_KEY,
       'Content-Type': 'application/json',
-      'model': 's2.1-pro-free'
+      'model': model
     },
     body: JSON.stringify({
-      text,
+      text: directedText,
       reference_id: FISH_COMMENT_REFERENCE_ID,
       format: 'mp3'
     }),
@@ -2450,6 +2452,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
   <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
   <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
+  <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
   <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a /verity, que ahora incluye imagen + voz.</div>
   <button id="copyCommentsUrl">📋 Copiar Verity imagen + voz para PRISM</button>
   <input id="commentsUrl" readonly>
@@ -2499,6 +2502,7 @@ const clearReader=document.getElementById('clearReader');
 const readerTestName=document.getElementById('readerTestName');
 const readerTestComment=document.getElementById('readerTestComment');
 const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
+const dramaTestBtn=document.getElementById('dramaTestBtn');
 const readerTestStatus=document.getElementById('readerTestStatus');
 const copyCommentsUrl=document.getElementById('copyCommentsUrl');
 const commentsUrl=document.getElementById('commentsUrl');
@@ -2688,6 +2692,20 @@ testReader.onclick=async()=>{
     readerTestStatus.textContent='❌ '+String(e.message||e);
   }finally{
     testReader.disabled=false;
+  }
+};
+
+dramaTestBtn.onclick=async()=>{
+  dramaTestBtn.disabled=true;
+  readerTestStatus.textContent='😈 Generando Verity con Drama 3…';
+  try{
+    const j=await api('/api/verity/drama-test',{});
+    await playLocalVerity(j.audio_url);
+    readerTestStatus.textContent='✅ Drama 3 sonando. Comparalo con la voz normal.';
+  }catch(e){
+    readerTestStatus.textContent='❌ Drama 3: '+String(e.message||e);
+  }finally{
+    dramaTestBtn.disabled=false;
   }
 };
 
@@ -3154,6 +3172,38 @@ const server = http.createServer(async (req, res) => {
       const name = safeTikTokReaderName(body.displayName || body.username || '') || 'Espectador';
       broadcast({ type: 'tiktok_chat_display', name, comment, at: Date.now() });
       return json(res, 200, { ok: true, name, comment });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/verity/drama-test') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const speechText = 'Naa, boludo, con JS no te metas. Buscate otro problema.';
+      const audioUrl = await makeCommentVoice(speechText, {
+        model: 'drama-3-preview',
+        direction: 'angry, protective, intense, sarcastic, controlled'
+      });
+      const at = Date.now();
+      broadcast({
+        type: 'audio',
+        url: audioUrl,
+        text: speechText,
+        spoken_text: speechText,
+        source: 'verity-tiktok-reply',
+        voice: 'verity-drama-3',
+        emotion: 'serio',
+        animation: 'shake',
+        comment: 'insulto a JS',
+        at
+      });
+      return json(res, 200, {
+        ok: true,
+        model: 'drama-3-preview',
+        audio_url: audioUrl,
+        speech_text: speechText
+      });
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e) });
     }
