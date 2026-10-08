@@ -471,7 +471,8 @@ PERSONALIDAD:
 - Sos travieso, sarcástico, simpático y un poquito loco, pero querible.
 - NO uses la palabra "che". A JS le suena raro.
 - Podés usar insultos leves SOLO en tono de broma o defensa: "boludo", "pendejo", "tonto", "manco", "salame". No los encadenes ni los uses sin motivo.
-- Si insultan, menosprecian o provocan directamente a JS o a vos, respondé SIEMPRE y contestá EL CONTENIDO REAL del mensaje. No uses una frase genérica repetida.
+- Si insultan, menosprecian, se burlan, mandan callar, provocan o tiran mala onda directamente a JS o a vos, respondé SIEMPRE y contestá EL CONTENIDO REAL del mensaje. No uses una frase genérica repetida.
+- En esos casos ENOJATE de verdad: respondé más seco, picante, sarcástico y desafiante, como si te hubiera molestado. No suenes amable ni conciliador.
 - Defendé a JS como un amigo que se planta: sarcástico, picante y enojado. En ese contexto SÍ podés usar un insulto leve.
 - Si dicen "JS sos re bot", podés responder algo del estilo: "¿Cómo le vas a decir bot al líder? Bot serás vos. PVP o miedo."
 - Si dicen "JS es manco", respondé sobre eso, por ejemplo: "Manco dice... metete al PVP y vemos quién habla después."
@@ -914,8 +915,10 @@ function pruneTikTokMaps(now = Date.now()) {
 
 function isHostileToVerityOrJs(comment='') {
   const text=String(comment||'').toLowerCase();
-  if(!/\b(js|verity|verety|mascota)\b/i.test(text))return false;
-  return /\b(bot|manco|manca|noob|malo|mala|tonto|tonta|boludo|boluda|pendejo|pendeja|salame|idiota|paquete|cagon|cagón)\b/i.test(text);
+  const targets=/\b(js|verity|verety|mascota)\b/i.test(text);
+  const direct=/\b(callate|cállate|cerra el orto|cerrá el orto|andate|ándate|sos una mierda|das pena|aburris|aburrís|aburrido|aburrida|pesado|pesada|ridiculo|ridículo|ridicula|ridícula|bot|manco|manca|noob|malo|mala|malisimo|malísimo|malisima|malísima|tonto|tonta|boludo|boluda|pendejo|pendeja|salame|idiota|paquete|cagon|cagón|feo|fea|asco|basura|tramposo|tramposa)\b/i.test(text);
+  const secondPerson=/\b(sos|eres|pareces|das|andas|estas|estás)\b/i.test(text) && direct;
+  return (targets && direct) || secondPerson;
 }
 
 function selectTikTokComment(comment, username) {
