@@ -232,7 +232,11 @@ events.onmessage=(e)=>{
    else if(m.type==='human_talk')humanTalk(m);
    else if(m.type==='human_audio')playHumanAudio(m);
    else if(m.type==='tiktok_gift')enqueueGift(m);
-   else if(m.type==='audio'&&m.url&&m.source!=='tiktok-comment-reader')voice(m);
+   else if(m.type==='audio'&&m.url){
+     const src=String(m.source||'');
+     const isVerity=src==='tiktok-comment-reader'||src==='verity-tiktok-reply'||src==='verity-thinking';
+     if(!isVerity)voice(m);
+   }
  }catch{}
 };
 document.body.addEventListener('pointerdown',()=>{
