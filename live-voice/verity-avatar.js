@@ -10,7 +10,10 @@ module.exports = function createVerityAvatar({broadcast, controllerKey, isAuthor
     'mid-v5': path.join(__dirname, 'verity-mid-v5.webp'),
     'talkblink-v5': path.join(__dirname, 'verity-talkblink-v5.webp'),
     'grin-v2': path.join(__dirname, 'verity-grin-v2.webp'),
-    'crazy-v2': path.join(__dirname, 'verity-crazy-v2.webp')
+    'crazy-v2': path.join(__dirname, 'verity-crazy-v2.webp'),
+    'angry-v1': path.join(__dirname, 'verity-angry-v1.webp'),
+    'angry-talk-v1': path.join(__dirname, 'verity-angry-talk-v1.webp'),
+    'angry-talkblink-v1': path.join(__dirname, 'verity-angry-talkblink-v1.webp')
   };
   const state = {visible:true, mood:'normal', autoMood:true, side:'left', size:165};
   const snapshot = () => ({...state});
@@ -46,6 +49,9 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 <img class="verityFrame" data-frame="talkblink" src="/verity-image/talkblink-v5.webp" alt="">
 <img class="verityFrame" data-frame="grin" src="/verity-image/grin-v2.webp" alt="">
 <img class="verityFrame" data-frame="crazy" src="/verity-image/crazy-v2.webp" alt="">
+<img class="verityFrame" data-frame="angry" src="/verity-image/angry-v1.webp" alt="">
+<img class="verityFrame" data-frame="angrytalk" src="/verity-image/angry-talk-v1.webp" alt="">
+<img class="verityFrame" data-frame="angrytalkblink" src="/verity-image/angry-talkblink-v1.webp" alt="">
 </div>
 <audio id="verityAudio" playsinline preload="auto"></audio>
 <script>
@@ -65,7 +71,7 @@ let nextBlink=Date.now()+1800+Math.random()*2200,blinkUntil=0;
 for(const el of frameNodes){
  try{if(el.decode)el.decode().catch(()=>{});}catch{}
 }
-function safeMood(m){return ['normal','grin','crazy'].includes(m)?m:'normal';}
+function safeMood(m){return ['normal','grin','crazy','angry'].includes(m)?m:'normal';}
 function update(s){
  if(!s)return;
  state={...state,...s};
@@ -88,7 +94,7 @@ function detectMood(m){
  const animation=String((m&&m.animation)||'').toLowerCase();
  const insults=/(bolud|pendej|tont|manco|salame|pelotud|idiot|imbecil|estupid|forr|puta|puto|mierda)/i;
  const targets=/(verity|verety|mascota|\bjs\b)/i;
- if((insults.test(comment)&&targets.test(comment))||emotion==='serio'||animation==='shake')return 'crazy';
+ if((insults.test(comment)&&targets.test(comment))||emotion==='serio'||animation==='shake')return 'angry';
  if(/(loc[oa]|wtf|demencia|caos|😡|🤬|malvad|miedo|terror)/i.test(text))return 'crazy';
  if(emotion==='burlon'||emotion==='divertido'||animation==='laugh'||animation==='smirk')return 'grin';
  if(/(jaj|jeje|jiji|xd|😂|🤣|💀|lol)/i.test(text))return 'grin';
@@ -110,9 +116,14 @@ function render(){
  const talking=(speaking&&jsBlocks===0)||now<demoUntil;
  const blinking=isBlinking(now);
  actor.classList.toggle('talking',talking);
- actor.classList.toggle('crazyTalking',talking&&reactionMood==='crazy');
+ actor.classList.toggle('crazyTalking',talking&&(reactionMood==='crazy'||reactionMood==='angry'));
  if(talking){
-   setImage(blinking?'talkblink':mouthFrame(now));
+   if(reactionMood==='angry'){
+     const mf=mouthFrame(now);
+     setImage(blinking?'angrytalkblink':(mf==='closed'?'angry':'angrytalk'));
+   }else{
+     setImage(blinking?'talkblink':mouthFrame(now));
+   }
    return;
  }
  const mood=state.autoMood&&now<reactionUntil?reactionMood:safeMood(state.mood);
