@@ -5,6 +5,7 @@ const os = require('os');
 const { URL } = require('url');
 const { spawn } = require('child_process');
 const { Pool } = require('pg');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const ffmpegPath = require('ffmpeg-static');
 
 const PORT = process.env.PORT || 10000;
@@ -20,6 +21,17 @@ const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.8-flash');
 const KIE_API_KEY = String(process.env.KIE_API_KEY || '');
 const KIE_MODEL = String(process.env.KIE_MODEL || 'gpt-6-1-sol');
 const DATABASE_URL = String(process.env.DATABASE_URL || '');
+const R2_ACCOUNT_ID = String(process.env.R2_ACCOUNT_ID || '');
+const R2_ACCESS_KEY_ID = String(process.env.R2_ACCESS_KEY_ID || '');
+const R2_SECRET_ACCESS_KEY = String(process.env.R2_SECRET_ACCESS_KEY || '');
+const R2_BUCKET = String(process.env.R2_BUCKET || '');
+const R2_ENDPOINT = String(process.env.R2_ENDPOINT || (R2_ACCOUNT_ID ? 'https://' + R2_ACCOUNT_ID + '.r2.cloudflarestorage.com' : ''));
+const R2_CONFIGURED = Boolean(R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
+const r2 = R2_CONFIGURED ? new S3Client({
+  region:'auto',
+  endpoint:R2_ENDPOINT,
+  credentials:{ accessKeyId:R2_ACCESS_KEY_ID, secretAccessKey:R2_SECRET_ACCESS_KEY }
+}) : null;
 const verityDb = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 3 }) : null;
 const clients = new Set();
 const generatedAudio = new Map();
@@ -100,11 +112,45 @@ async function initVerityDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await verityDb.query(`
+    CREATE TABLE IF NOT EXISTS music_library (
+      track_id TEXT PRIMARY KEY,
+      track_name TEXT NOT NULL,
+      object_key TEXT UNIQUE NOT NULL,
+      mime TEXT NOT NULL,
+      size BIGINT NOT NULL DEFAULT 0,
+      added_at BIGINT NOT NULL DEFAULT 0,
+      favorite BOOLEAN NOT NULL DEFAULT FALSE,
+      play_count INTEGER NOT NULL DEFAULT 0,
+      last_played BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  const lib=await verityDb.query('SELECT * FROM music_library ORDER BY added_at ASC');
+  for(const row of lib.rows){
+    musicTracks.set(String(row.track_id),{
+      id:String(row.track_id),
+      name:String(row.track_name),
+      mime:String(row.mime||'audio/mpeg'),
+      size:Number(row.size||0),
+      objectKey:String(row.object_key),
+      addedAt:Number(row.added_at||0),
+      favorite:Boolean(row.favorite),
+      playCount:Number(row.play_count||0),
+      lastPlayed:Number(row.last_played||0)
+    });
+  }
   const ms=await verityDb.query('SELECT * FROM music_player_memory WHERE id=1 LIMIT 1');
   if(ms.rows[0]){
     musicState.volume=Math.max(0,Math.min(1,Number(ms.rows[0].volume)||0.22));
     musicState.shuffle=Boolean(ms.rows[0].shuffle);
     musicState.lastTrackName=String(ms.rows[0].last_track_name||'');
+    if(musicState.lastTrackName){
+      const restored=[...musicTracks.values()].find(t=>t.name===musicState.lastTrackName);
+      if(restored)musicState.trackId=restored.id;
+    }
+  } else if(musicTracks.size){
+    musicState.trackId=[...musicTracks.keys()][0];
   }
 }
 
@@ -1671,6 +1717,23 @@ async function persistMusicTrackMemory(track) {
        updated_at=NOW()`,
     [track.name,Boolean(track.favorite),Number(track.playCount||0),Number(track.lastPlayed||0)]
   );
+  if(track.objectKey){
+    await verityDb.query(
+      `INSERT INTO music_library(track_id,track_name,object_key,mime,size,added_at,favorite,play_count,last_played,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+       ON CONFLICT(track_id) DO UPDATE SET
+         track_name=EXCLUDED.track_name,
+         object_key=EXCLUDED.object_key,
+         mime=EXCLUDED.mime,
+         size=EXCLUDED.size,
+         added_at=EXCLUDED.added_at,
+         favorite=EXCLUDED.favorite,
+         play_count=EXCLUDED.play_count,
+         last_played=EXCLUDED.last_played,
+         updated_at=NOW()`,
+      [track.id,track.name,track.objectKey,track.mime||'audio/mpeg',Number(track.size||0),Number(track.addedAt||Date.now()),Boolean(track.favorite),Number(track.playCount||0),Number(track.lastPlayed||0)]
+    );
+  }
 }
 
 async function persistMusicPlayerMemory() {
@@ -3514,21 +3577,35 @@ const server = http.createServer(async (req, res) => {
 
       const ext = path.extname(originalName).toLowerCase() || (mime === 'audio/mpeg' ? '.mp3' : '');
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2,10);
-      const diskPath = path.join(MUSIC_DIR, id + ext);
-      fs.writeFileSync(diskPath, buf);
+      const objectKey = 'music/' + id + ext;
+      let diskPath = '';
+      if (R2_CONFIGURED) {
+        await r2.send(new PutObjectCommand({
+          Bucket:R2_BUCKET,
+          Key:objectKey,
+          Body:buf,
+          ContentType:mime
+        }));
+      } else {
+        diskPath = path.join(MUSIC_DIR, id + ext);
+        fs.writeFileSync(diskPath, buf);
+      }
 
       const memory = await loadMusicTrackMemory(originalName);
-      musicTracks.set(id, {
+      const track = {
         id,
         name: originalName,
         mime,
         size: buf.length,
         path: diskPath,
+        objectKey,
         addedAt: Date.now(),
         favorite: memory.favorite,
         playCount: memory.playCount,
         lastPlayed: memory.lastPlayed
-      });
+      };
+      musicTracks.set(id, track);
+      await persistMusicTrackMemory(track);
 
       if (!musicState.trackId || (musicState.lastTrackName && musicState.lastTrackName === originalName)) {
         musicState.trackId = id;
@@ -3580,7 +3657,15 @@ const server = http.createServer(async (req, res) => {
         const id = String(body.trackId || '');
         const track = musicTracks.get(id);
         if (track) {
-          try { fs.unlinkSync(track.path); } catch {}
+          if (R2_CONFIGURED && track.objectKey) {
+            try { await r2.send(new DeleteObjectCommand({ Bucket:R2_BUCKET, Key:track.objectKey })); } catch {}
+          }
+          if (track.path) {
+            try { fs.unlinkSync(track.path); } catch {}
+          }
+          if (verityDb) {
+            await verityDb.query('DELETE FROM music_library WHERE track_id=$1',[id]).catch(()=>{});
+          }
           musicTracks.delete(id);
           if (musicState.trackId === id) {
             musicState.trackId = '';
@@ -3612,11 +3697,41 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && u.pathname.startsWith('/music-file/')) {
     const id = decodeURIComponent(u.pathname.slice('/music-file/'.length));
     const track = musicTracks.get(id);
-    if (!track || !fs.existsSync(track.path)) {
+    if (!track) {
       res.writeHead(404);
       return res.end();
     }
 
+    if (R2_CONFIGURED && track.objectKey) {
+      try {
+        const range = String(req.headers.range || '');
+        const out = await r2.send(new GetObjectCommand({
+          Bucket:R2_BUCKET,
+          Key:track.objectKey,
+          ...(range ? { Range:range } : {})
+        }));
+        const headers = {
+          'content-type': track.mime || out.ContentType || 'audio/mpeg',
+          'accept-ranges': 'bytes',
+          'cache-control': 'private, max-age=3600'
+        };
+        if (out.ContentLength != null) headers['content-length'] = String(out.ContentLength);
+        if (out.ContentRange) headers['content-range'] = out.ContentRange;
+        res.writeHead(range && out.ContentRange ? 206 : 200, headers);
+        if (out.Body && typeof out.Body.pipe === 'function') return out.Body.pipe(res);
+        const bytes = out.Body ? Buffer.from(await out.Body.transformToByteArray()) : Buffer.alloc(0);
+        return res.end(bytes);
+      } catch (e) {
+        console.error('R2 music read error:', String(e?.message || e));
+        res.writeHead(502);
+        return res.end();
+      }
+    }
+
+    if (!track.path || !fs.existsSync(track.path)) {
+      res.writeHead(404);
+      return res.end();
+    }
     const stat = fs.statSync(track.path);
     const range = String(req.headers.range || '');
     if (range) {
