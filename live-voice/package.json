@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "ffmpeg-static": "^5.2.0",
+    "pg": "^8.13.1",
     "tiktok-live-connector": "^2.5.0"
   }
 }
