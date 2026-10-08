@@ -706,7 +706,7 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
         }],
         reasoning: { effort: 'low' }
       }),
-      signal: AbortSignal.timeout(7000)
+      signal: AbortSignal.timeout(4500)
     });
 
     if (!r.ok) {
@@ -798,7 +798,7 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
             maxOutputTokens: 220
           }
         }),
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(3500)
       }
     );
 
@@ -890,24 +890,33 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   // Gemini fallback keeps AI quality if KIE fails.
   // Local fallback is reserved only for total provider failure.
 
-  // Gemini fallbacks, one attempt each to avoid long waits in a LIVE.
+  // Gemini: una sola oportunidad corta. Si está en 429/cuota, no insistimos.
   if (GEMINI_API_KEY) {
     try {
       return await requestGemini(GEMINI_MODEL);
     } catch (e) {
       lastError = e;
-    }
-
-    if (GEMINI_MODEL !== 'gemini-3.6-flash') {
-      try {
-        return await requestGemini('gemini-3.6-flash');
-      } catch (e) {
-        lastError = e;
+      if (Number(e?.status) !== 429 && GEMINI_MODEL !== 'gemini-3.6-flash') {
+        try {
+          return await requestGemini('gemini-3.6-flash');
+        } catch (e2) {
+          lastError = e2;
+        }
       }
     }
   }
 
-  throw lastError || new Error('mini_js_brain_unavailable');
+  // En LIVE es mejor saltar un comentario que responderlo demasiado tarde.
+  return {
+    should_reply:false,
+    reply:'',
+    emotion:'normal',
+    animation:'idle',
+    priority:1,
+    model:'local-skip',
+    provider:'local-skip',
+    error:String(lastError?.message || 'brain_unavailable').slice(0,160)
+  };
 }
 
 function cleanTikTokUsername(value) {
@@ -990,19 +999,30 @@ function selectTikTokComment(comment, username) {
   if (/\b(hola|saludame|salúdame|saludos|bro|amigo|che)\b/i.test(lower)) score += 1;
 
   const mode = tiktokState.mode;
-  const randomPick = tiktokState.awayMode ? 0.55 : (mode === 'high' ? 0.30 : mode === 'low' ? 0.08 : 0.16);
-  const selected = tiktokState.awayMode
-    ? (score >= 1 || Math.random() < randomPick)
-    : (score >= 2 || (score === 1 && Math.random() < randomPick) || (score === 0 && Math.random() < randomPick / 4));
+  const randomPick = tiktokState.awayMode ? 0.38 : (mode === 'high' ? 0.22 : mode === 'low' ? 0.05 : 0.11);
+  let selected = tiktokState.awayMode
+    ? (score >= 2 || Math.random() < randomPick)
+    : (score >= 2 || (score === 1 && Math.random() < randomPick) || (score === 0 && Math.random() < randomPick / 5));
+
+  // Aunque nombren a Verity, no responde todo: evita formar cola y llegar tarde.
+  if (selected && mention && !hostile && !tiktokState.awayMode) {
+    const directQuestion = /[?¿]/.test(text);
+    const mentionChance = mode === 'high'
+      ? (directQuestion ? 0.72 : 0.50)
+      : mode === 'low'
+        ? (directQuestion ? 0.32 : 0.18)
+        : (directQuestion ? 0.52 : 0.30);
+    if (Math.random() >= mentionChance) selected = false;
+  }
 
   return { selected, reason: selected ? 'candidate' : 'local_filter', score };
 }
 
 function tikTokReplyCooldownMs() {
-  if (tiktokState.awayMode) return 5500;
-  if (tiktokState.mode === 'high') return 7000;
-  if (tiktokState.mode === 'low') return 20000;
-  return 12000;
+  if (tiktokState.awayMode) return 9000;
+  if (tiktokState.mode === 'high') return 12000;
+  if (tiktokState.mode === 'low') return 28000;
+  return 18000;
 }
 
 const READER_BLOCKED_COMMENT_TERMS = [
