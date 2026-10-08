@@ -2266,7 +2266,7 @@ function makeMiniJsControlPage(key) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mini JS · Cerebro</title>
+<title>Verity · Cerebro del LIVE</title>
 <style>
 body{margin:0;background:#101010;color:#fff;font-family:system-ui;padding:18px}
 .card{max-width:620px;margin:0 auto 16px;background:#1b1b1b;border-radius:20px;padding:18px}
@@ -2286,8 +2286,8 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
 </head>
 <body>
 <div class="card">
-  <h2>📡 TikTok LIVE → Mini JS</h2>
-  <p>Lee el chat, filtra localmente y manda a GPT solo algunos comentarios interesantes.</p>
+  <h2>📡 TikTok LIVE → Verity</h2>
+  <p>Verity puede leer comentarios y también responder algunos con su propia personalidad.</p>
   <input id="liveUser" placeholder="@usuario de TikTok">
   <select id="mode">
     <option value="low">Baja · habla poco</option>
@@ -2296,7 +2296,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   </select>
   <button id="connectTikTok">Conectar TikTok LIVE</button>
   <div class="row">
-    <button id="toggleAuto">AUTO respuestas: OFF</button>
+    <button id="toggleAuto">🤖 Verity responde comentarios: OFF</button>
     <button id="disconnectTikTok" class="danger">Desconectar</button>
   </div>
   <div class="row">
@@ -2328,8 +2328,8 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
 </div>
 
 <div class="card">
-  <h2>🤖 Mini JS · Prueba manual</h2>
-  <p>GPT 6 Luna de Kie es el cerebro rápido del LIVE; Sol y Gemini quedan como respaldo.</p>
+  <h2>🤖 Verity · Prueba manual</h2>
+  <p>Probá cómo respondería Verity antes de usarlo en el LIVE. GPT 6 Luna es el cerebro rápido; Sol y Gemini quedan como respaldo.</p>
   <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
   <textarea id="comment" placeholder="Comentario, ej: JS sos re manco 😂"></textarea>
   <button id="send">Probar comentario</button>
@@ -2450,7 +2450,7 @@ function renderTikTok(s){
   };
   tiktokStatus.textContent=labels[s.status]||('Estado: '+s.status);
   if(s.error)tiktokStatus.textContent+=' · '+s.error;
-  toggleAuto.textContent='AUTO respuestas: '+(s.autoReply?'ON':'OFF');
+  toggleAuto.textContent='🤖 Verity responde comentarios: '+(s.autoReply?'ON':'OFF');
   toggleAuto.classList.toggle('on',Boolean(s.autoReply));
   toggleReader.textContent='🔊 Verity comentarios: '+(s.readerEnabled?'ON':'OFF');
   toggleReader.classList.toggle('on',Boolean(s.readerEnabled));
