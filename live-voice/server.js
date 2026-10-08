@@ -1088,7 +1088,21 @@ async function processTikTokComment(comment, username, displayName = '') {
   tiktokState.selected += 1;
 
   try {
-    const thought = await miniJsThink(comment, username, displayName);
+    let thought;
+    try {
+      thought = await miniJsThink(comment, username, displayName);
+    } catch (e) {
+      if (!hostile) throw e;
+      thought = {
+        should_reply: true,
+        reply: hostileFallbackReply(comment),
+        emotion: 'serio',
+        animation: 'shake',
+        priority: 5,
+        model: 'local-defense',
+        provider: 'local'
+      };
+    }
     if (hostile) {
       thought.should_reply = true;
       thought.reply = String(thought.reply || hostileFallbackReply(comment)).trim();
@@ -3343,7 +3357,21 @@ const server = http.createServer(async (req, res) => {
       if (comment.length > 500) return json(res, 400, { ok: false, error: 'comment_too_long' });
 
       const hostile = isHostileToVerityOrJs(comment);
-      const thought = await miniJsThink(comment, username);
+      let thought;
+      try {
+        thought = await miniJsThink(comment, username);
+      } catch (e) {
+        if (!hostile) throw e;
+        thought = {
+          should_reply: true,
+          reply: hostileFallbackReply(comment),
+          emotion: 'serio',
+          animation: 'shake',
+          priority: 5,
+          model: 'local-defense',
+          provider: 'local'
+        };
+      }
       if (hostile) {
         thought.should_reply = true;
         thought.reply = String(thought.reply || hostileFallbackReply(comment)).trim();
