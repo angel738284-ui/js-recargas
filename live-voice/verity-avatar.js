@@ -267,12 +267,17 @@ button.on{background:#ffe65e;color:#221d00}input[type=range]{width:100%}
 <div class="row"><button id="crazy">🤪 Loco</button><button id="auto">✨ Caras AUTO: ON</button></div>
 <div class="row"><button id="left">⬅️ Izquierda</button><button id="right">➡️ Derecha</button></div>
 <p>Tamaño: <b id="label">165px</b></p><input id="size" type="range" min="90" max="320" step="5" value="165">
+<button id="replyAuto" style="width:100%;margin-top:12px">🤖 Verity responde comentarios: OFF</button>
+<p id="replyStatus">Consultando respuestas automáticas…</p>
+<button id="openLive" style="width:100%;margin-bottom:8px">💬 Abrir TikTok + Verity</button>
 <button id="copy" style="width:100%">📋 Copiar URL /verity para PRISM</button>
 </div>
 <script>
 const KEY=${JSON.stringify(key)};
 let state={visible:true,mood:'normal',autoMood:true,side:'left',size:165};
+let replyState={autoReply:false,mode:'medium',status:'disconnected'};
 const status=document.getElementById('status'),size=document.getElementById('size'),auto=document.getElementById('auto');
+const replyAuto=document.getElementById('replyAuto'),replyStatus=document.getElementById('replyStatus');
 function paint(j){
  state={...state,...j};
  document.getElementById('show').textContent=state.visible?'🙈 Ocultar':'👀 Mostrar';
@@ -296,9 +301,31 @@ document.getElementById('left').onclick=()=>send('side',{side:'left'});
 document.getElementById('right').onclick=()=>send('side',{side:'right'});
 size.oninput=()=>document.getElementById('label').textContent=size.value+'px';
 size.onchange=()=>send('size',{size:Number(size.value)});
+async function refreshReply(){
+ try{
+  const r=await fetch('/api/tiktok/status',{headers:{'authorization':'Bearer '+KEY},cache:'no-store'});
+  const j=await r.json();if(!r.ok)throw Error(j.error||'error');
+  replyState={...replyState,...j};
+  replyAuto.textContent='🤖 Verity responde comentarios: '+(replyState.autoReply?'ON':'OFF');
+  replyAuto.classList.toggle('on',Boolean(replyState.autoReply));
+  replyStatus.textContent=(replyState.status==='connected'?'🟢 TikTok conectado a @'+(replyState.username||''):'⚪ TikTok desconectado')+' · modo '+(replyState.mode||'medium');
+ }catch(e){replyStatus.textContent='No pude consultar TikTok: '+String(e.message||e);}
+}
+replyAuto.onclick=async()=>{
+ try{
+  const enabled=!replyState.autoReply;
+  const r=await fetch('/api/tiktok/auto',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+KEY},body:JSON.stringify({enabled,mode:replyState.mode||'medium'})});
+  const j=await r.json();if(!r.ok)throw Error(j.error||'error');
+  replyState={...replyState,...j};
+  await refreshReply();
+ }catch(e){replyStatus.textContent='Error: '+String(e.message||e);}
+};
+document.getElementById('openLive').onclick=()=>{location.href='/mini-js-control?key='+encodeURIComponent(KEY);};
 document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/verity?v=6');
 fetch('/api/verity/state').then(r=>r.json()).then(paint).catch(()=>{});
-new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='verity_avatar_state')paint(m)}catch{}};
+refreshReply();
+setInterval(refreshReply,5000);
+new EventSource('/events').onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='verity_avatar_state')paint(m);else if(m.type==='tiktok_status'||m.type==='tiktok_reply'||m.type==='tiktok_error')refreshReply()}catch{}};
 </script></body></html>`;}
 
   async function handle(req,res,u){
