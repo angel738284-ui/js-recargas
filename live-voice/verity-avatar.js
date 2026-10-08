@@ -203,9 +203,28 @@ function pauseForJs(msg){
  };
  probe.play().catch(()=>{if(!timer)timer=setTimeout(done,5000);});
 }
+function clearThinking(){
+ queue=queue.filter(x=>x&&x.source!=='verity-thinking');
+ if(current&&current.source==='verity-thinking'){
+   try{audio.pause();audio.currentTime=0;}catch{}
+   audio.onended=null;
+   audio.onerror=null;
+   current=null;
+   speaking=false;
+   render();
+ }
+}
 function enqueueComment(msg){
  if(!msg||!msg.url)return;
- queue.push(msg);
+ if(msg.source==='verity-tiktok-reply'){
+   clearThinking();
+   queue.unshift(msg);
+ }else if(msg.source==='verity-thinking'){
+   queue=queue.filter(x=>x&&x.source!=='verity-thinking');
+   queue.push(msg);
+ }else{
+   queue.push(msg);
+ }
  playNext();
 }
 function humanTalk(msg){
@@ -247,7 +266,7 @@ events.onmessage=e=>{
      reactionUntil=demoUntil+1800;
      render();
    }else if(m.type==='audio'&&m.url){
-     if(m.source==='tiktok-comment-reader'||m.source==='verity-tiktok-reply')enqueueComment(m);
+     if(m.source==='tiktok-comment-reader'||m.source==='verity-tiktok-reply'||m.source==='verity-thinking')enqueueComment(m);
      else pauseForJs(m);
    }
  }catch{}
