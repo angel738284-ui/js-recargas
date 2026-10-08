@@ -34,7 +34,9 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .verityFrame{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:contain;opacity:0;visibility:hidden;user-select:none;-webkit-user-drag:none}
 .verityFrame.active{opacity:1;visibility:visible}
 #actor.talking{animation:talkBounce .44s cubic-bezier(.35,.05,.2,1) infinite}
+#actor.crazyTalking{animation:crazyTalk .22s ease-in-out infinite}
 @keyframes talkBounce{0%,100%{transform:translateY(0) scale(1)}48%{transform:translateY(-4px) scale(1.01)}72%{transform:translateY(-1px) scale(.997)}}
+@keyframes crazyTalk{0%,100%{transform:translateY(0) rotate(0deg) scale(1)}25%{transform:translateY(-5px) rotate(-2.2deg) scale(1.025)}55%{transform:translateY(-2px) rotate(2.4deg) scale(1.015)}78%{transform:translateY(-6px) rotate(-1.2deg) scale(1.03)}}
 </style></head><body>
 <div id="actor">
 <img class="verityFrame active" data-frame="normal" src="/verity-image/idle-v5.webp" alt="Mini Verity">
@@ -81,7 +83,14 @@ function setImage(name){
 }
 function detectMood(m){
  const text=String((m&&m.spoken_text)||(m&&m.text)||(m&&m.comment)||'').toLowerCase();
+ const comment=String((m&&m.comment)||'').toLowerCase();
+ const emotion=String((m&&m.emotion)||'').toLowerCase();
+ const animation=String((m&&m.animation)||'').toLowerCase();
+ const insults=/(bolud|pendej|tont|manco|salame|pelotud|idiot|imbecil|estupid|forr|puta|puto|mierda)/i;
+ const targets=/(verity|verety|mascota|\bjs\b)/i;
+ if((insults.test(comment)&&targets.test(comment))||emotion==='serio'||animation==='shake')return 'crazy';
  if(/(loc[oa]|wtf|demencia|caos|😡|🤬|malvad|miedo|terror)/i.test(text))return 'crazy';
+ if(emotion==='burlon'||emotion==='divertido'||animation==='laugh'||animation==='smirk')return 'grin';
  if(/(jaj|jeje|jiji|xd|😂|🤣|💀|lol)/i.test(text))return 'grin';
  return 'normal';
 }
@@ -101,6 +110,7 @@ function render(){
  const talking=(speaking&&jsBlocks===0)||now<demoUntil;
  const blinking=isBlinking(now);
  actor.classList.toggle('talking',talking);
+ actor.classList.toggle('crazyTalking',talking&&reactionMood==='crazy');
  if(talking){
    setImage(blinking?'talkblink':mouthFrame(now));
    return;
