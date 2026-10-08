@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const { URL } = require('url');
 const { spawn } = require('child_process');
+const { Pool } = require('pg');
 const ffmpegPath = require('ffmpeg-static');
 
 const PORT = process.env.PORT || 10000;
@@ -18,6 +19,8 @@ const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '');
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.8-flash');
 const KIE_API_KEY = String(process.env.KIE_API_KEY || '');
 const KIE_MODEL = String(process.env.KIE_MODEL || 'gpt-6-1-sol');
+const DATABASE_URL = String(process.env.DATABASE_URL || '');
+const verityDb = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 3 }) : null;
 const clients = new Set();
 const generatedAudio = new Map();
 
@@ -62,6 +65,64 @@ const tiktokSeen = new Map();
 const tiktokUserLastReply = new Map();
 const verityLiveMemory = new Map();
 const tiktokReadQueue = [];
+
+async function initVerityDb() {
+  if (!verityDb) return;
+  await verityDb.query(`
+    CREATE TABLE IF NOT EXISTS verity_memory (
+      username TEXT PRIMARY KEY,
+      display_name TEXT DEFAULT '',
+      preferred_name TEXT DEFAULT '',
+      notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      recent JSONB NOT NULL DEFAULT '[]'::jsonb,
+      warmth INTEGER NOT NULL DEFAULT 0,
+      last_seen BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function hydrateVerityPersistentMemory(username='') {
+  if (!verityDb) return null;
+  const key = String(username||'').trim().replace(/^@/,'').toLowerCase().slice(0,80);
+  if (!key) return null;
+  const r = await verityDb.query('SELECT * FROM verity_memory WHERE username=$1 LIMIT 1',[key]);
+  const row = r.rows[0];
+  if (!row) return null;
+  const current = verityLiveMemory.get(key) || {};
+  const merged = {
+    username:key,
+    displayName: current.displayName || row.display_name || '',
+    preferredName: current.preferredName || row.preferred_name || '',
+    notes: Array.isArray(current.notes)&&current.notes.length ? current.notes : (Array.isArray(row.notes)?row.notes:[]),
+    recent: Array.isArray(current.recent)&&current.recent.length ? current.recent : (Array.isArray(row.recent)?row.recent:[]),
+    warmth: Number.isFinite(current.warmth) ? current.warmth : Number(row.warmth||0),
+    lastSeen: Math.max(Number(current.lastSeen||0), Number(row.last_seen||0))
+  };
+  verityLiveMemory.set(key, merged);
+  return merged;
+}
+
+async function persistVerityMemory(username='') {
+  if (!verityDb) return;
+  const key = String(username||'').trim().replace(/^@/,'').toLowerCase().slice(0,80);
+  const m = verityLiveMemory.get(key);
+  if (!key || !m) return;
+  await verityDb.query(
+    `INSERT INTO verity_memory
+      (username,display_name,preferred_name,notes,recent,warmth,last_seen,updated_at)
+     VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,NOW())
+     ON CONFLICT (username) DO UPDATE SET
+      display_name=EXCLUDED.display_name,
+      preferred_name=EXCLUDED.preferred_name,
+      notes=EXCLUDED.notes,
+      recent=EXCLUDED.recent,
+      warmth=EXCLUDED.warmth,
+      last_seen=EXCLUDED.last_seen,
+      updated_at=NOW()`,
+    [key,m.displayName||'',m.preferredName||'',JSON.stringify(m.notes||[]),JSON.stringify(m.recent||[]),Number(m.warmth||0),Number(m.lastSeen||0)]
+  );
+}
 
 function json(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -569,7 +630,9 @@ async function miniJsThink(comment, username = '', displayName = '') {
   const safeDisplay = String(displayName || '').trim().slice(0, 80);
   if (!safeComment) throw new Error('comment_required');
 
+  try { await hydrateVerityPersistentMemory(safeUser); } catch {}
   updateVerityLiveMemory(safeUser, safeDisplay, safeComment);
+  persistVerityMemory(safeUser).catch(()=>{});
   const memory = verityMemoryText(safeUser);
   const userText =
     (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
@@ -3352,4 +3415,7 @@ setInterval(() => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('JS Live Voice listening on', PORT);
+  initVerityDb()
+    .then(()=>console.log(DATABASE_URL ? 'Verity persistent memory ready' : 'Verity persistent memory disabled: DATABASE_URL missing'))
+    .catch(e=>console.error('Verity DB init error:', String(e?.message||e)));
 });
