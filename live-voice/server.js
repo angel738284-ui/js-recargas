@@ -3597,9 +3597,66 @@ setInterval(() => {
   }
 }, 25000);
 
+async function diagnoseLiveProvidersOnce() {
+  const results = [];
+
+  if (KIE_API_KEY) {
+    const t = Date.now();
+    try {
+      const r = await fetch('https://api.kie.ai/codex/v1/responses', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + KIE_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: KIE_MODEL,
+          stream: false,
+          input: [{ role: 'user', content: [{ type: 'input_text', text: 'Respond only with {"ok":true}.' }] }],
+          reasoning: { effort: 'low' }
+        }),
+        signal: AbortSignal.timeout(12000)
+      });
+      const raw = await r.text();
+      results.push({ provider:'kie', model:KIE_MODEL, ok:r.ok, status:r.status, ms:Date.now()-t, detail:r.ok?'ok':raw.slice(0,120) });
+    } catch (e) {
+      results.push({ provider:'kie', model:KIE_MODEL, ok:false, status:0, ms:Date.now()-t, detail:String(e?.message||e).slice(0,120) });
+    }
+  } else results.push({ provider:'kie', ok:false, detail:'key_missing' });
+
+  if (GEMINI_API_KEY) {
+    const t = Date.now();
+    try {
+      const r = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent',
+        {
+          method:'POST',
+          headers:{'x-goog-api-key':GEMINI_API_KEY,'content-type':'application/json'},
+          body:JSON.stringify({contents:[{role:'user',parts:[{text:'Reply only OK'}]}],generationConfig:{maxOutputTokens:8,temperature:0}}),
+          signal:AbortSignal.timeout(12000)
+        }
+      );
+      const raw=await r.text();
+      results.push({ provider:'gemini', model:GEMINI_MODEL, ok:r.ok, status:r.status, ms:Date.now()-t, detail:r.ok?'ok':raw.slice(0,120) });
+    } catch(e) {
+      results.push({ provider:'gemini', model:GEMINI_MODEL, ok:false, status:0, ms:Date.now()-t, detail:String(e?.message||e).slice(0,120) });
+    }
+  } else results.push({ provider:'gemini', ok:false, detail:'key_missing' });
+
+  if (FISH_COMMENT_API_KEY) {
+    const t=Date.now();
+    try {
+      await makeCommentVoice('Prueba rápida de Verity.');
+      results.push({ provider:'fish-comment', model:'s2.1-pro-free', ok:true, status:200, ms:Date.now()-t, detail:'ok' });
+    } catch(e) {
+      results.push({ provider:'fish-comment', model:'s2.1-pro-free', ok:false, status:0, ms:Date.now()-t, detail:String(e?.message||e).slice(0,120) });
+    }
+  } else results.push({ provider:'fish-comment', ok:false, detail:'key_missing' });
+
+  for (const row of results) console.log('VERITY_DIAG', JSON.stringify(row));
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log('JS Live Voice listening on', PORT);
   initVerityDb()
     .then(()=>console.log(DATABASE_URL ? 'Verity persistent memory ready' : 'Verity persistent memory disabled: DATABASE_URL missing'))
     .catch(e=>console.error('Verity DB init error:', String(e?.message||e)));
+  diagnoseLiveProvidersOnce().catch(e=>console.error('VERITY_DIAG_FATAL', String(e?.message||e)));
 });
