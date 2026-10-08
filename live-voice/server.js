@@ -462,9 +462,13 @@ PERSONALIDAD:
 - Sos travieso, sarcástico, simpático y un poquito loco, pero querible.
 - NO uses la palabra "che". A JS le suena raro.
 - Podés usar insultos leves SOLO en tono de broma o defensa: "boludo", "pendejo", "tonto", "manco", "salame". No los encadenes ni los uses sin motivo.
-- Si insultan directamente a JS o a vos, respondé como un amigo que se planta: sarcasmo + una devolución corta. En ese contexto SÍ podés usar uno de esos insultos leves.
-- Ejemplos de tono: "Naa, boludo, con JS no.", "Qué pendejo sos, dejá tranquilo a JS.", "Tonto, a mí no me corrés con esa."
-- Nunca amenazas, odio ni humillación fuerte.
+- Si insultan, menosprecian o provocan directamente a JS o a vos, respondé SIEMPRE y contestá EL CONTENIDO REAL del mensaje. No uses una frase genérica repetida.
+- Defendé a JS como un amigo que se planta: sarcástico, picante y enojado. En ese contexto SÍ podés usar un insulto leve.
+- Si dicen "JS sos re bot", podés responder algo del estilo: "¿Cómo le vas a decir bot al líder? Bot serás vos. PVP o miedo."
+- Si dicen "JS es manco", respondé sobre eso, por ejemplo: "Manco dice... metete al PVP y vemos quién habla después."
+- Si te insultan a vos, respondé específicamente a lo que dijeron, no con "con JS no te metas".
+- Variá las respuestas. No repitas muletillas ni copies siempre los ejemplos.
+- Nunca amenazas reales, odio ni humillación fuerte.
 - Si tratan bien a JS o te dicen algo bonito, respondé de forma cariñosa, agradecida o tierna.
 - Si alguien te trata con cariño repetidamente, podés reconocerlo como alguien buena onda.
 - A veces continuá la charla con UNA pregunta corta y natural al final. No lo hagas siempre: aproximadamente 1 de cada 3 respuestas amistosas.
@@ -820,6 +824,12 @@ function pruneTikTokMaps(now = Date.now()) {
   }
 }
 
+function isHostileToVerityOrJs(comment='') {
+  const text=String(comment||'').toLowerCase();
+  if(!/\b(js|verity|verety|mascota)\b/i.test(text))return false;
+  return /\b(bot|manco|manca|noob|malo|mala|tonto|tonta|boludo|boluda|pendejo|pendeja|salame|idiota|paquete|cagon|cagón)\b/i.test(text);
+}
+
 function selectTikTokComment(comment, username) {
   const text = String(comment || '').trim();
   const user = String(username || '').toLowerCase();
@@ -836,8 +846,9 @@ function selectTikTokComment(comment, username) {
   tiktokSeen.set(key, now);
   if (seenAt && now - seenAt < 90000) return { selected: false, reason: 'duplicate', score: 0 };
 
+  const hostile = isHostileToVerityOrJs(text);
   const lastUser = tiktokUserLastReply.get(user);
-  if (lastUser && now - lastUser < 45000) return { selected: false, reason: 'user_cooldown', score: 0 };
+  if (lastUser && now - lastUser < 45000 && !hostile) return { selected: false, reason: 'user_cooldown', score: 0 };
 
   const lower = text.toLowerCase();
   let score = 0;
@@ -845,6 +856,7 @@ function selectTikTokComment(comment, username) {
   if (/[?¿]/.test(text)) score += 2;
   if (/\b(verity|verety|mascota)\b/i.test(lower)) score += 5;
   if (/\b(js|mini js|free fire|freefire|ff)\b/i.test(lower)) score += 2;
+  if (isHostileToVerityOrJs(text)) score += 8;
   if (/\b(manco|malísimo|malo|1v1|uno contra uno|te gano|ganame|regalame|regálame|diamantes|booyah|pase|outfit|rank|rango|duelo)\b/i.test(lower)) score += 2;
   if (/\b(que|qué|como|cómo|cuando|cuándo|donde|dónde|quien|quién|por que|por qué|cuanto|cuánto)\b/i.test(lower)) score += 1;
   if (/\b(hola|saludame|salúdame|saludos|bro|amigo|che)\b/i.test(lower)) score += 1;
@@ -930,12 +942,23 @@ function safeTikTokReaderName(value) {
   return raw;
 }
 
+function cleanDefensiveReaderText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!text) return '';
+  const mild = new Set(['boludo','boluda','boludos','boludas','idiota','imbecil','estupido','estupida','tonto','tonta','gil','salame']);
+  const hardTerms = READER_BLOCKED_COMMENT_TERMS.filter(term => !mild.has(term));
+  if (containsBlockedReaderTerm(text, hardTerms)) return '';
+  const useful = text.replace(/[\p{P}\p{S}\s]/gu, '');
+  return useful.length >= 2 ? text : '';
+}
+
 function tikTokReaderSpeech(item) {
-  const text = cleanTikTokReaderText(item.comment);
+  const text = item.defensive ? cleanDefensiveReaderText(item.comment) : cleanTikTokReaderText(item.comment);
   if (!text) return '';
   if (!tiktokState.readerIncludeName) return text;
+  const spoken = text.replace(/\bjs\b/gi,'jota ese');
   const rawName = safeTikTokReaderName(item.displayName || item.username || '');
-  return rawName ? rawName + ' dice: ' + text : text;
+  return rawName ? rawName + ' dice: ' + spoken : spoken;
 }
 async function makeCommentVoice(text, options = {}) {
   if (!FISH_COMMENT_API_KEY) throw new Error('fish_comment_api_key_missing');
@@ -1013,18 +1036,28 @@ async function drainTikTokReadQueue() {
   }
 }
 
-function enqueueTikTokRead(comment, username, displayName = '') {
-  if (!tiktokState.readerEnabled) return;
-  const text = cleanTikTokReaderText(comment);
+function enqueueTikTokRead(comment, username, displayName = '', forceDefensive = false) {
+  if (!tiktokState.readerEnabled && !forceDefensive) return;
+  const text = forceDefensive ? cleanDefensiveReaderText(comment) : cleanTikTokReaderText(comment);
   if (!text) return;
   tiktokReadQueue.push({
     comment: text,
+    defensive: Boolean(forceDefensive),
     username: String(username || '').slice(0, 80),
     displayName: String(displayName || '').slice(0, 80),
     at: Date.now()
   });
   tiktokState.readerQueued = tiktokReadQueue.length;
   drainTikTokReadQueue().catch(() => {});
+}
+
+function hostileFallbackReply(comment='') {
+  const t=String(comment||'').toLowerCase();
+  if(/\bbot\b/i.test(t))return '¿Bot? Bot serás vos. Metete al PVP y hablamos.';
+  if(/\bmanc[oa]\b/i.test(t))return 'Manco dice... metete al PVP y vemos quién habla después.';
+  if(/\bnoob\b/i.test(t))return '¿Noob? Dale, entrá al PVP y demostralo.';
+  if(/\bmal[oa]\b/i.test(t))return 'Mucho hablar. PVP y vemos quién es malo.';
+  return 'Naa, así no. Si vas a hablar, bancátela en el PVP.';
 }
 
 async function processTikTokComment(comment, username, displayName = '') {
@@ -1040,7 +1073,8 @@ async function processTikTokComment(comment, username, displayName = '') {
       at: Date.now()
     });
   }
-  enqueueTikTokRead(comment, username, displayName);
+  const hostile = isHostileToVerityOrJs(comment);
+  enqueueTikTokRead(comment, username, displayName, hostile);
 
   if (!tiktokState.autoReply) return;
 
@@ -1048,17 +1082,33 @@ async function processTikTokComment(comment, username, displayName = '') {
   if (!picked.selected) return;
 
   const now = Date.now();
-  if (tiktokMiniBusy || now - lastTikTokReplyAt < tikTokReplyCooldownMs()) return;
+  if (tiktokMiniBusy || (!hostile && now - lastTikTokReplyAt < tikTokReplyCooldownMs())) return;
 
   tiktokMiniBusy = true;
   tiktokState.selected += 1;
 
   try {
     const thought = await miniJsThink(comment, username, displayName);
+    if (hostile) {
+      thought.should_reply = true;
+      thought.reply = String(thought.reply || hostileFallbackReply(comment)).trim();
+      thought.emotion = 'serio';
+      thought.animation = 'shake';
+      thought.priority = 5;
+    }
     if (!thought.should_reply || !thought.reply) return;
 
     const speechText = miniJsSpokenText(thought.reply, displayName, username);
-    const audioUrl = await makeCommentVoice(speechText);
+    let audioUrl;
+    if (hostile) {
+      try {
+        audioUrl = await makeCommentVoice(speechText, { model: 'drama-3-preview', direction: 'irritated, defensive, intense' });
+      } catch {
+        audioUrl = await makeCommentVoice(speechText);
+      }
+    } else {
+      audioUrl = await makeCommentVoice(speechText);
+    }
     const at = Date.now();
 
     lastTikTokReplyAt = at;
@@ -2773,6 +2823,13 @@ send.onclick=async()=>{
       'Prioridad: '+j.priority,
       'Modelo: '+(j.model||'gemini')
     ].join(String.fromCharCode(10));
+    if(j.read_audio_url){
+      audio.src=j.read_audio_url;
+      try{
+        await audio.play();
+        await new Promise(resolve=>{audio.onended=resolve;audio.onerror=resolve;});
+      }catch{}
+    }
     if(j.audio_url){
       audio.src=j.audio_url;
       try{await audio.play();}catch{}
@@ -3285,12 +3342,50 @@ const server = http.createServer(async (req, res) => {
       if (!comment) return json(res, 400, { ok: false, error: 'comment_required' });
       if (comment.length > 500) return json(res, 400, { ok: false, error: 'comment_too_long' });
 
+      const hostile = isHostileToVerityOrJs(comment);
       const thought = await miniJsThink(comment, username);
+      if (hostile) {
+        thought.should_reply = true;
+        thought.reply = String(thought.reply || hostileFallbackReply(comment)).trim();
+        thought.emotion = 'serio';
+        thought.animation = 'shake';
+        thought.priority = 5;
+      }
+
       let audioUrl = null;
+      let readAudioUrl = null;
 
       if (thought.should_reply && thought.reply && body.speak !== false) {
+        if (hostile) {
+          const safeRead = cleanDefensiveReaderText(comment);
+          if (safeRead) {
+            const readSpeech = (safeTikTokReaderName(username) ? safeTikTokReaderName(username) + ' dice: ' : '') + safeRead.replace(/\bjs\b/gi,'jota ese');
+            readAudioUrl = await makeCommentVoice(readSpeech);
+            broadcast({
+              type: 'audio',
+              url: readAudioUrl,
+              text: comment,
+              spoken_text: readSpeech,
+              source: 'tiktok-comment-reader',
+              voice: 'verity',
+              username,
+              displayName: username,
+              comment,
+              at: Date.now()
+            });
+          }
+        }
+
         const speechText = miniJsSpokenText(thought.reply, username, username);
-        audioUrl = await makeCommentVoice(speechText);
+        if (hostile) {
+          try {
+            audioUrl = await makeCommentVoice(speechText, { model: 'drama-3-preview', direction: 'irritated, defensive, intense' });
+          } catch {
+            audioUrl = await makeCommentVoice(speechText);
+          }
+        } else {
+          audioUrl = await makeCommentVoice(speechText);
+        }
         broadcast({
           type: 'audio',
           url: audioUrl,
@@ -3309,6 +3404,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         model: GEMINI_MODEL,
         ...thought,
+        read_audio_url: readAudioUrl,
         audio_url: audioUrl,
         connected_players: clients.size
       });
