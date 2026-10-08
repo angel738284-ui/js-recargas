@@ -929,6 +929,12 @@ function getVerityMention(comment='') {
   };
 }
 
+function isHostileToJs(comment='') {
+  const text=String(comment||'').toLowerCase();
+  if(!/\bjs\b/i.test(text))return false;
+  return /\b(callate|cállate|cerra el orto|cerrá el orto|andate|ándate|sos una mierda|das pena|aburris|aburrís|aburrido|aburrida|pesado|pesada|ridiculo|ridículo|ridicula|ridícula|bot|manco|manca|noob|malo|mala|malisimo|malísimo|malisima|malísima|tonto|tonta|boludo|boluda|pendejo|pendeja|salame|idiota|paquete|cagon|cagón|feo|fea|asco|basura|tramposo|tramposa)\b/i.test(text);
+}
+
 function isHostileToVerityOrJs(comment='') {
   const text=String(comment||'').toLowerCase();
   const targets=/\b(js|verity|verety|mascota)\b/i.test(text);
@@ -947,7 +953,8 @@ function selectTikTokComment(comment, username) {
   if (!/[a-záéíóúüñ0-9]/i.test(text)) return { selected: false, reason: 'emoji_only', score: 0 };
 
   const mention=getVerityMention(text);
-  if(!mention)return { selected:false, reason:'verity_name_required', score:0 };
+  const jsAttack=isHostileToJs(text);
+  if(!mention && !jsAttack)return { selected:false, reason:'verity_name_required', score:0 };
 
   pruneTikTokMaps(now);
 
