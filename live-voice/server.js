@@ -504,6 +504,7 @@ function sanitizeMiniJsSpeech(text) {
   let s = String(text || '').trim();
 
   s = s
+    .replace(/\bjs\b/gi, 'jota ese')
     .replace(/\b(?:ja){2,}\b/gi, 'naa')
     .replace(/\bja(?:\s+ja){1,}\b/gi, 'naa')
     .replace(/\b(?:je){2,}\b/gi, 'naa')
