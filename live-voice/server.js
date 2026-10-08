@@ -44,6 +44,7 @@ let tiktokState = {
   username: '',
   roomId: '',
   autoReply: false,
+  awayMode: false,
   mode: 'medium',
   received: 0,
   selected: 0,
@@ -662,10 +663,14 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   const nameRule = mention && !mention.correct
     ? 'IMPORTANTE: escribieron tu nombre como "' + mention.written + '". Corregilo de forma breve y natural diciendo que es "Verity", y después respondé el contenido del mensaje.\n'
     : '';
+  const awayRule = tiktokState.awayMode
+    ? 'MODO JS YA REGRESA ACTIVO: JS está ocupado y vuelve enseguida. Mientras tanto vos, Verity, te quedás acompañando y hablando con el chat. Respondé aunque no te nombren si el mensaje tiene sentido. Si preguntan por JS, explicá de forma natural y variada que está ocupado y que ya vuelve; nunca digas que vos sos JS.\n'
+    : '';
   const userText =
     (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
     (safeDisplay ? 'Nombre visible: ' + safeDisplay + '\n' : '') +
     nameRule +
+    awayRule +
     'MEMORIA DE ESTE USUARIO EN EL LIVE:\n' + memory + '\n' +
     'Comentario actual: ' + safeComment;
 
@@ -954,7 +959,7 @@ function selectTikTokComment(comment, username) {
 
   const mention=getVerityMention(text);
   const jsAttack=isHostileToJs(text);
-  if(!mention && !jsAttack)return { selected:false, reason:'verity_name_required', score:0 };
+  if(!tiktokState.awayMode && !mention && !jsAttack)return { selected:false, reason:'verity_name_required', score:0 };
 
   pruneTikTokMaps(now);
 
@@ -979,13 +984,16 @@ function selectTikTokComment(comment, username) {
   if (/\b(hola|saludame|salúdame|saludos|bro|amigo|che)\b/i.test(lower)) score += 1;
 
   const mode = tiktokState.mode;
-  const randomPick = mode === 'high' ? 0.30 : mode === 'low' ? 0.08 : 0.16;
-  const selected = score >= 2 || (score === 1 && Math.random() < randomPick) || (score === 0 && Math.random() < randomPick / 4);
+  const randomPick = tiktokState.awayMode ? 0.55 : (mode === 'high' ? 0.30 : mode === 'low' ? 0.08 : 0.16);
+  const selected = tiktokState.awayMode
+    ? (score >= 1 || Math.random() < randomPick)
+    : (score >= 2 || (score === 1 && Math.random() < randomPick) || (score === 0 && Math.random() < randomPick / 4));
 
   return { selected, reason: selected ? 'candidate' : 'local_filter', score };
 }
 
 function tikTokReplyCooldownMs() {
+  if (tiktokState.awayMode) return 5500;
   if (tiktokState.mode === 'high') return 7000;
   if (tiktokState.mode === 'low') return 20000;
   return 12000;
@@ -2623,6 +2631,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
     <button id="toggleAuto">🤖 Verity responde comentarios: OFF</button>
     <button id="disconnectTikTok" class="danger">Desconectar</button>
   </div>
+  <button id="toggleAway">⏳ JS ya regresa</button>
   <div class="row">
     <button id="toggleReader">🔊 Verity comentarios: OFF</button>
     <button id="testReader">🎧 Probar Verity</button>
@@ -2677,6 +2686,7 @@ const mode=document.getElementById('mode');
 const connectTikTok=document.getElementById('connectTikTok');
 const disconnectTikTok=document.getElementById('disconnectTikTok');
 const toggleAuto=document.getElementById('toggleAuto');
+const toggleAway=document.getElementById('toggleAway');
 const toggleReader=document.getElementById('toggleReader');
 const toggleReaderName=document.getElementById('toggleReaderName');
 const testReader=document.getElementById('testReader');
@@ -2778,6 +2788,8 @@ function renderTikTok(s){
   if(s.error)tiktokStatus.textContent+=' · '+s.error;
   toggleAuto.textContent='🤖 Verity responde comentarios: '+(s.autoReply?'ON':'OFF');
   toggleAuto.classList.toggle('on',Boolean(s.autoReply));
+  toggleAway.textContent=s.awayMode?'✅ JS volvió':'⏳ JS ya regresa';
+  toggleAway.classList.toggle('on',Boolean(s.awayMode));
   toggleReader.textContent='🔊 Verity comentarios: '+(s.readerEnabled?'ON':'OFF');
   toggleReader.classList.toggle('on',Boolean(s.readerEnabled));
   toggleReaderName.textContent='👤 Decir nombre: '+(s.readerIncludeName?'ON':'OFF');
@@ -2829,6 +2841,22 @@ toggleAuto.onclick=async()=>{
     renderTikTok(await api('/api/tiktok/auto',{enabled,mode:mode.value}));
   }catch(e){
     tiktokStatus.textContent='🔴 '+String(e.message||e);
+  }
+};
+
+toggleAway.onclick=async()=>{
+  const enabled=!(liveState&&liveState.awayMode);
+  toggleAway.disabled=true;
+  try{
+    const s=await api('/api/tiktok/away',{enabled});
+    renderTikTok(s);
+    tiktokStatus.textContent=enabled
+      ? '⏳ JS está ocupado · Verity queda hablando con el chat'
+      : '✅ JS volvió · Verity volvió al modo normal';
+  }catch(e){
+    tiktokStatus.textContent='🔴 '+String(e.message||e);
+  }finally{
+    toggleAway.disabled=false;
   }
 };
 
@@ -3450,6 +3478,23 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, ...tiktokState, readerBusy: tiktokReadBusy });
   }
 
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/away') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    try {
+      const body = await readJson(req);
+      tiktokState.awayMode = Boolean(body.enabled);
+      if (tiktokState.awayMode) tiktokState.autoReply = true;
+      broadcast({
+        type: 'tiktok_away_mode',
+        enabled: tiktokState.awayMode,
+        at: Date.now()
+      });
+      return json(res, 200, { ok: true, ...tiktokState, busy: tiktokMiniBusy });
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String(e?.message || e), ...tiktokState });
+    }
+  }
+
   if (req.method === 'POST' && u.pathname === '/api/tiktok/auto') {
     if (!isControllerAuthorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
     try {
@@ -3457,6 +3502,7 @@ const server = http.createServer(async (req, res) => {
       const mode = ['low','medium','high'].includes(String(body.mode)) ? String(body.mode) : tiktokState.mode;
       tiktokState.mode = mode;
       tiktokState.autoReply = Boolean(body.enabled);
+      if (!tiktokState.autoReply) tiktokState.awayMode = false;
       return json(res, 200, { ok: true, ...tiktokState, busy: tiktokMiniBusy });
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e) });
