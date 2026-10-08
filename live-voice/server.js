@@ -2729,7 +2729,25 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
   <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
   <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
-  <button id="giftTestBtn">🎁 Probar regalo (Rosa)</button>
+
+  <div style="margin-top:14px;padding:14px;background:#242424;border-radius:14px">
+    <b>🎁 Probador de regalos</b>
+    <select id="giftTestName">
+      <option value="Rosa">🌹 Rosa</option>
+      <option value="TikTok">🎵 TikTok</option>
+      <option value="Corazón">❤️ Corazón</option>
+      <option value="GG">🔥 GG</option>
+      <option value="León">🦁 León</option>
+      <option value="Universo">🌌 Universo</option>
+      <option value="Regalo">🎁 Otro regalo</option>
+    </select>
+    <div class="row">
+      <input id="giftTestCount" type="number" min="1" value="1" placeholder="Cantidad">
+      <input id="giftTestDiamonds" type="number" min="0" value="1" placeholder="Diamantes">
+    </div>
+    <button id="giftTestBtn">🎁 Probar regalo</button>
+  </div>
+
   <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
   <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a /verity, que ahora incluye imagen + voz.</div>
   <button id="copyCommentsUrl">📋 Copiar Verity imagen + voz para PRISM</button>
@@ -2782,6 +2800,9 @@ const readerTestName=document.getElementById('readerTestName');
 const readerTestComment=document.getElementById('readerTestComment');
 const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
 const giftTestBtn=document.getElementById('giftTestBtn');
+const giftTestName=document.getElementById('giftTestName');
+const giftTestCount=document.getElementById('giftTestCount');
+const giftTestDiamonds=document.getElementById('giftTestDiamonds');
 const dramaTestBtn=document.getElementById('dramaTestBtn');
 const readerTestStatus=document.getElementById('readerTestStatus');
 const copyCommentsUrl=document.getElementById('copyCommentsUrl');
@@ -3011,12 +3032,15 @@ giftTestBtn.onclick=async()=>{
   giftTestBtn.disabled=true;
   readerTestStatus.textContent='🎁 Probando agradecimiento por una Rosa…';
   try{
+    const giftName=giftTestName.value||'Rosa';
+    const repeatCount=Math.max(1,Number(giftTestCount.value)||1);
+    const diamondCount=Math.max(0,Number(giftTestDiamonds.value)||0);
     const j=await api('/api/tiktok/gift/test',{
       username:readerTestName.value.trim()||'lucas_ff',
       displayName:readerTestName.value.trim()||'Lucas',
-      giftName:'Rosa',
-      repeatCount:1,
-      diamondCount:1
+      giftName,
+      repeatCount,
+      diamondCount
     });
     if(j.audio_url)await playLocalVerity(j.audio_url);
     readerTestStatus.textContent='✅ Verity agradeció: “'+j.reply+'”';
