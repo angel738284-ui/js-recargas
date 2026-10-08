@@ -658,9 +658,14 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   updateVerityLiveMemory(safeUser, safeDisplay, safeComment);
   persistVerityMemory(safeUser).catch(()=>{});
   const memory = verityMemoryText(safeUser);
+  const mention = getVerityMention(safeComment);
+  const nameRule = mention && !mention.correct
+    ? 'IMPORTANTE: escribieron tu nombre como "' + mention.written + '". Corregilo de forma breve y natural diciendo que es "Verity", y después respondé el contenido del mensaje.\n'
+    : '';
   const userText =
     (safeUser ? 'Usuario: @' + safeUser + '\n' : '') +
     (safeDisplay ? 'Nombre visible: ' + safeDisplay + '\n' : '') +
+    nameRule +
     'MEMORIA DE ESTE USUARIO EN EL LIVE:\n' + memory + '\n' +
     'Comentario actual: ' + safeComment;
 
@@ -913,6 +918,17 @@ function pruneTikTokMaps(now = Date.now()) {
   }
 }
 
+function getVerityMention(comment='') {
+  const text=String(comment||'');
+  const m=text.match(/\b(verity|verety|vereti|veriti)\b/i);
+  if(!m)return null;
+  const written=m[1];
+  return {
+    written,
+    correct: written.toLowerCase()==='verity'
+  };
+}
+
 function isHostileToVerityOrJs(comment='') {
   const text=String(comment||'').toLowerCase();
   const targets=/\b(js|verity|verety|mascota)\b/i.test(text);
@@ -929,6 +945,9 @@ function selectTikTokComment(comment, username) {
   if (text.length < 2 || text.length > 220) return { selected: false, reason: 'length', score: 0 };
   if (/https?:\/\/|www\.|\.com\b/i.test(text)) return { selected: false, reason: 'link', score: 0 };
   if (!/[a-záéíóúüñ0-9]/i.test(text)) return { selected: false, reason: 'emoji_only', score: 0 };
+
+  const mention=getVerityMention(text);
+  if(!mention)return { selected:false, reason:'verity_name_required', score:0 };
 
   pruneTikTokMaps(now);
 
