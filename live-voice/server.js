@@ -23,6 +23,7 @@ const DATABASE_URL = String(process.env.DATABASE_URL || '');
 const verityDb = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 3 }) : null;
 const clients = new Set();
 const generatedAudio = new Map();
+let providerDiagnostics = [];
 
 const MUSIC_DIR = process.env.MUSIC_DIR || path.join(os.tmpdir(), 'js-live-music');
 try { fs.mkdirSync(MUSIC_DIR, { recursive: true }); } catch {}
@@ -783,6 +784,19 @@ async function miniJsThink(comment, username = '', displayName = '') {
         lastError = e;
       }
     }
+  }
+
+  // In a hostile LIVE comment, prioritize speed: if KIE failed, answer locally now.
+  if (isHostileToVerityOrJs(safeComment) && lastError) {
+    return {
+      should_reply: true,
+      reply: hostileFallbackReply(safeComment),
+      emotion: 'serio',
+      animation: 'shake',
+      priority: 5,
+      model: 'local-defense',
+      provider: 'local'
+    };
   }
 
   // Gemini fallbacks, one attempt each to avoid long waits in a LIVE.
@@ -2933,7 +2947,8 @@ const server = http.createServer(async (req, res) => {
       tiktok_username: tiktokState.username,
       tiktok_auto_reply: tiktokState.autoReply,
       tiktok_reader_enabled: tiktokState.readerEnabled,
-      tiktok_reader_configured: Boolean(FISH_COMMENT_API_KEY)
+      tiktok_reader_configured: Boolean(FISH_COMMENT_API_KEY),
+      provider_diagnostics: providerDiagnostics
     });
   }
 
@@ -3650,6 +3665,7 @@ async function diagnoseLiveProvidersOnce() {
     }
   } else results.push({ provider:'fish-comment', ok:false, detail:'key_missing' });
 
+  providerDiagnostics = results;
   for (const row of results) console.log('VERITY_DIAG', JSON.stringify(row));
 }
 
