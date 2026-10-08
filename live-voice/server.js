@@ -82,6 +82,30 @@ async function initVerityDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await verityDb.query(`
+    CREATE TABLE IF NOT EXISTS music_track_memory (
+      track_name TEXT PRIMARY KEY,
+      favorite BOOLEAN NOT NULL DEFAULT FALSE,
+      play_count INTEGER NOT NULL DEFAULT 0,
+      last_played BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await verityDb.query(`
+    CREATE TABLE IF NOT EXISTS music_player_memory (
+      id INTEGER PRIMARY KEY,
+      volume DOUBLE PRECISION NOT NULL DEFAULT 0.22,
+      shuffle BOOLEAN NOT NULL DEFAULT FALSE,
+      last_track_name TEXT DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  const ms=await verityDb.query('SELECT * FROM music_player_memory WHERE id=1 LIMIT 1');
+  if(ms.rows[0]){
+    musicState.volume=Math.max(0,Math.min(1,Number(ms.rows[0].volume)||0.22));
+    musicState.shuffle=Boolean(ms.rows[0].shuffle);
+    musicState.lastTrackName=String(ms.rows[0].last_track_name||'');
+  }
 }
 
 async function hydrateVerityPersistentMemory(username='') {
@@ -1624,6 +1648,58 @@ function musicMimeFromName(name, fallback = '') {
   return String(fallback || 'application/octet-stream').split(';')[0];
 }
 
+async function loadMusicTrackMemory(name='') {
+  if (!verityDb || !name) return { favorite:false, playCount:0, lastPlayed:0 };
+  const r=await verityDb.query('SELECT favorite,play_count,last_played FROM music_track_memory WHERE track_name=$1 LIMIT 1',[name]);
+  const row=r.rows[0];
+  return row ? {
+    favorite:Boolean(row.favorite),
+    playCount:Number(row.play_count||0),
+    lastPlayed:Number(row.last_played||0)
+  } : { favorite:false, playCount:0, lastPlayed:0 };
+}
+
+async function persistMusicTrackMemory(track) {
+  if (!verityDb || !track) return;
+  await verityDb.query(
+    `INSERT INTO music_track_memory(track_name,favorite,play_count,last_played,updated_at)
+     VALUES($1,$2,$3,$4,NOW())
+     ON CONFLICT(track_name) DO UPDATE SET
+       favorite=EXCLUDED.favorite,
+       play_count=EXCLUDED.play_count,
+       last_played=EXCLUDED.last_played,
+       updated_at=NOW()`,
+    [track.name,Boolean(track.favorite),Number(track.playCount||0),Number(track.lastPlayed||0)]
+  );
+}
+
+async function persistMusicPlayerMemory() {
+  if (!verityDb) return;
+  const track=musicTracks.get(musicState.trackId);
+  const lastName=track?.name || musicState.lastTrackName || '';
+  musicState.lastTrackName=lastName;
+  await verityDb.query(
+    `INSERT INTO music_player_memory(id,volume,shuffle,last_track_name,updated_at)
+     VALUES(1,$1,$2,$3,NOW())
+     ON CONFLICT(id) DO UPDATE SET
+       volume=EXCLUDED.volume,
+       shuffle=EXCLUDED.shuffle,
+       last_track_name=EXCLUDED.last_track_name,
+       updated_at=NOW()`,
+    [Number(musicState.volume||0),Boolean(musicState.shuffle),lastName]
+  );
+}
+
+function markMusicPlayed(id) {
+  const track=musicTracks.get(id);
+  if(!track)return;
+  track.playCount=Number(track.playCount||0)+1;
+  track.lastPlayed=Date.now();
+  musicState.lastTrackName=track.name;
+  persistMusicTrackMemory(track).catch(()=>{});
+  persistMusicPlayerMemory().catch(()=>{});
+}
+
 function musicPublicState() {
   const track = musicTracks.get(musicState.trackId);
   return {
@@ -1642,7 +1718,10 @@ function musicFullState() {
     tracks: [...musicTracks.values()].map(t => ({
       id: t.id,
       name: t.name,
-      size: t.size
+      size: t.size,
+      favorite: Boolean(t.favorite),
+      playCount: Number(t.playCount||0),
+      lastPlayed: Number(t.lastPlayed||0)
     }))
   };
 }
@@ -1747,7 +1826,15 @@ input[type=range]{width:100%}
 <div class="small">Después agregá <b>/music</b> como segunda fuente web en PRISM.</div>
 </div>
 <div class="card">
-<h2>Playlist</h2>
+<h2>Biblioteca</h2>
+<div class="row">
+<button id="viewAll">🎵 Todas</button>
+<button id="viewFav">⭐ Favoritas</button>
+</div>
+<div class="row">
+<button id="viewRecent">🕘 Recientes</button>
+<button id="viewTop">🔥 Más usadas</button>
+</div>
 <div id="list">Todavía no subiste música.</div>
 </div>
 <script>
@@ -1762,7 +1849,12 @@ const next=document.getElementById('next');
 const shuffle=document.getElementById('shuffle');
 const volume=document.getElementById('volume');
 const volText=document.getElementById('volText');
+const viewAll=document.getElementById('viewAll');
+const viewFav=document.getElementById('viewFav');
+const viewRecent=document.getElementById('viewRecent');
+const viewTop=document.getElementById('viewTop');
 let state=null;
+let musicView='all';
 
 async function api(url,opt={}){
   opt.headers={...(opt.headers||{}),authorization:'Bearer '+KEY};
@@ -1782,7 +1874,13 @@ function render(j){
   const v=Math.round((Number(j.volume)||0)*100);
   volume.value=v;volText.textContent=v+'%';
   if(!j.tracks||!j.tracks.length){list.textContent='Todavía no subiste música.';return;}
-  list.innerHTML=j.tracks.map(x=>'<div class="track"><div class="name">'+esc(x.name)+'</div><button data-play="'+x.id+'">▶️</button><button class="danger" data-del="'+x.id+'">🗑️</button></div>').join('');
+  let tracks=[...j.tracks];
+  if(musicView==='fav')tracks=tracks.filter(x=>x.favorite);
+  else if(musicView==='recent')tracks=tracks.filter(x=>Number(x.lastPlayed)>0).sort((a,b)=>Number(b.lastPlayed)-Number(a.lastPlayed));
+  else if(musicView==='top')tracks=tracks.sort((a,b)=>Number(b.playCount||0)-Number(a.playCount||0));
+  if(!tracks.length){list.textContent=musicView==='fav'?'Todavía no marcaste favoritas.':'No hay canciones para mostrar.';return;}
+  list.innerHTML=tracks.map(x=>'<div class="track"><div class="name">'+esc(x.name)+'<div class="small">'+(x.playCount?('▶️ '+x.playCount+' veces'):'Nunca reproducida')+'</div></div><button data-fav="'+x.id+'">'+(x.favorite?'⭐':'☆')+'</button><button data-play="'+x.id+'">▶️</button><button class="danger" data-del="'+x.id+'">🗑️</button></div>').join('');
+  list.querySelectorAll('[data-fav]').forEach(b=>b.onclick=()=>control('favorite',{trackId:b.dataset.fav}));
   list.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>control('select',{trackId:b.dataset.play,playing:true}));
   list.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>control('delete',{trackId:b.dataset.del}));
 }
@@ -1813,6 +1911,10 @@ play.onclick=()=>control(state&&state.playing?'pause':'play');
 prev.onclick=()=>control('prev');
 next.onclick=()=>control('next');
 shuffle.onclick=()=>control('shuffle',{enabled:!(state&&state.shuffle)});
+viewAll.onclick=()=>{musicView='all';render(state);};
+viewFav.onclick=()=>{musicView='fav';render(state);};
+viewRecent.onclick=()=>{musicView='recent';render(state);};
+viewTop.onclick=()=>{musicView='top';render(state);};
 volume.oninput=()=>{volText.textContent=volume.value+'%';};
 volume.onchange=()=>control('volume',{volume:Number(volume.value)/100});
 refresh();
@@ -3415,16 +3517,22 @@ const server = http.createServer(async (req, res) => {
       const diskPath = path.join(MUSIC_DIR, id + ext);
       fs.writeFileSync(diskPath, buf);
 
+      const memory = await loadMusicTrackMemory(originalName);
       musicTracks.set(id, {
         id,
         name: originalName,
         mime,
         size: buf.length,
         path: diskPath,
-        addedAt: Date.now()
+        addedAt: Date.now(),
+        favorite: memory.favorite,
+        playCount: memory.playCount,
+        lastPlayed: memory.lastPlayed
       });
 
-      if (!musicState.trackId) musicState.trackId = id;
+      if (!musicState.trackId || (musicState.lastTrackName && musicState.lastTrackName === originalName)) {
+        musicState.trackId = id;
+      }
       broadcastMusicState();
       return json(res, 200, { ok: true, ...musicFullState() });
     } catch (e) {
@@ -3441,19 +3549,29 @@ const server = http.createServer(async (req, res) => {
       if (action === 'play') {
         if (!musicState.trackId) pickNextTrack(1);
         musicState.playing = Boolean(musicState.trackId);
+        if (musicState.playing) markMusicPlayed(musicState.trackId);
       } else if (action === 'pause') {
         musicState.playing = false;
       } else if (action === 'next') {
         pickNextTrack(1);
         musicState.playing = Boolean(musicState.trackId);
+        if (musicState.playing) markMusicPlayed(musicState.trackId);
       } else if (action === 'prev') {
         pickNextTrack(-1);
         musicState.playing = Boolean(musicState.trackId);
+        if (musicState.playing) markMusicPlayed(musicState.trackId);
       } else if (action === 'select') {
         const id = String(body.trackId || '');
         if (!musicTracks.has(id)) return json(res, 404, { ok: false, error: 'track_not_found' });
         musicState.trackId = id;
         musicState.playing = body.playing !== false;
+        if (musicState.playing) markMusicPlayed(id);
+      } else if (action === 'favorite') {
+        const id = String(body.trackId || '');
+        const track = musicTracks.get(id);
+        if (!track) return json(res, 404, { ok:false, error:'track_not_found' });
+        track.favorite = body.enabled === undefined ? !track.favorite : Boolean(body.enabled);
+        await persistMusicTrackMemory(track);
       } else if (action === 'volume') {
         musicState.volume = Math.max(0, Math.min(1, Number(body.volume) || 0));
       } else if (action === 'shuffle') {
@@ -3474,6 +3592,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { ok: false, error: 'unknown_music_action' });
       }
 
+      await persistMusicPlayerMemory().catch(()=>{});
       broadcastMusicState();
       return json(res, 200, { ok: true, ...musicFullState() });
     } catch (e) {
@@ -3484,6 +3603,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && u.pathname === '/api/music/ended') {
     pickNextTrack(1);
     musicState.playing = Boolean(musicState.trackId);
+    if (musicState.playing) markMusicPlayed(musicState.trackId);
+    await persistMusicPlayerMemory().catch(()=>{});
     broadcastMusicState();
     return json(res, 200, { ok: true });
   }
