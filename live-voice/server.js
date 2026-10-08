@@ -1861,8 +1861,10 @@ button,.pick{width:100%;box-sizing:border-box;border:0;border-radius:13px;paddin
 input[type=file]{display:none}
 input[type=range]{width:100%}
 .track{display:flex;gap:8px;align-items:center;background:#262626;border-radius:12px;padding:10px;margin-top:8px}
-.track button{margin:0;padding:10px;font-size:14px}
-.name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track button{width:auto;flex:0 0 auto;margin:0;padding:10px 12px;font-size:14px}
+.name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#search{width:100%;box-sizing:border-box;margin:10px 0 2px;padding:13px 14px;border:0;border-radius:12px;background:#2a2a2a;color:#fff;font-size:16px;outline:none}
+#search::placeholder{color:#aaa}
 .small{opacity:.65;font-size:13px;margin-top:9px}
 .on{background:#78e386!important}
 .danger{background:#4a2424!important;color:#fff!important}
@@ -1898,6 +1900,7 @@ input[type=range]{width:100%}
 <button id="viewRecent">🕘 Recientes</button>
 <button id="viewTop">🔥 Más usadas</button>
 </div>
+<input id="search" type="search" placeholder="🔎 Buscar canción...">
 <div id="list">Todavía no subiste música.</div>
 </div>
 <script>
@@ -1916,6 +1919,7 @@ const viewAll=document.getElementById('viewAll');
 const viewFav=document.getElementById('viewFav');
 const viewRecent=document.getElementById('viewRecent');
 const viewTop=document.getElementById('viewTop');
+const search=document.getElementById('search');
 let state=null;
 let musicView='all';
 
@@ -1938,6 +1942,8 @@ function render(j){
   volume.value=v;volText.textContent=v+'%';
   if(!j.tracks||!j.tracks.length){list.textContent='Todavía no subiste música.';return;}
   let tracks=[...j.tracks];
+  const q=String(search.value||'').trim().toLowerCase();
+  if(q)tracks=tracks.filter(x=>String(x.name||'').toLowerCase().includes(q));
   if(musicView==='fav')tracks=tracks.filter(x=>x.favorite);
   else if(musicView==='recent')tracks=tracks.filter(x=>Number(x.lastPlayed)>0).sort((a,b)=>Number(b.lastPlayed)-Number(a.lastPlayed));
   else if(musicView==='top')tracks=tracks.sort((a,b)=>Number(b.playCount||0)-Number(a.playCount||0));
@@ -1978,6 +1984,7 @@ viewAll.onclick=()=>{musicView='all';render(state);};
 viewFav.onclick=()=>{musicView='fav';render(state);};
 viewRecent.onclick=()=>{musicView='recent';render(state);};
 viewTop.onclick=()=>{musicView='top';render(state);};
+search.oninput=()=>{if(state)render(state);};
 volume.oninput=()=>{volText.textContent=volume.value+'%';};
 volume.onchange=()=>control('volume',{volume:Number(volume.value)/100});
 refresh();
