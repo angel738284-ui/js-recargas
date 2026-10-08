@@ -226,7 +226,7 @@ events.onmessage=e=>{
      reactionUntil=demoUntil+1800;
      render();
    }else if(m.type==='audio'&&m.url){
-     if(m.source==='tiktok-comment-reader')enqueueComment(m);
+     if(m.source==='tiktok-comment-reader'||m.source==='verity-tiktok-reply')enqueueComment(m);
      else pauseForJs(m);
    }
  }catch{}
