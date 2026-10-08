@@ -746,9 +746,13 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   };
 
   const requestGemini = async (model) => {
+    const fastInstruction =
+      '\n\nMODO STREAMING LIVE: no devuelvas JSON. Respondé SOLO con la frase exacta que Verity dirá. ' +
+      'Si no conviene responder, escribí exactamente __NO_REPLY__. Mantené la personalidad, la memoria y el contexto.';
+
     const r = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' +
-        encodeURIComponent(model) + ':generateContent',
+        encodeURIComponent(model) + ':streamGenerateContent?alt=sse',
       {
         method: 'POST',
         headers: {
@@ -757,7 +761,7 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
         },
         body: JSON.stringify({
           systemInstruction: {
-            parts: [{ text: MINI_JS_SYSTEM }]
+            parts: [{ text: MINI_JS_SYSTEM + fastInstruction }]
           },
           contents: [{
             role: 'user',
@@ -766,39 +770,76 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
           generationConfig: {
             thinkingConfig: { thinkingLevel: 'low' },
             temperature: 0.9,
-            maxOutputTokens: 220,
-            responseMimeType: 'application/json'
+            maxOutputTokens: 220
           }
         }),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(5000)
       }
     );
 
-    const raw = await r.text();
-    let data;
-    try { data = JSON.parse(raw); }
-    catch {
-      const err = new Error('gemini_bad_json');
-      err.status = r.status;
-      throw err;
-    }
-
     if (!r.ok) {
-      const err = new Error(
-        'gemini_http_' + r.status + ': ' +
-        String(data?.error?.message || raw).slice(0, 300)
-      );
+      const raw = await r.text();
+      const err = new Error('gemini_http_' + r.status + ': ' + raw.slice(0, 300));
       err.status = r.status;
       throw err;
     }
 
-    const output = (data?.candidates?.[0]?.content?.parts || [])
-      .map(p => p?.text || '')
-      .join('')
-      .trim();
+    const reader = r.body?.getReader();
+    if (!reader) throw new Error('gemini_stream_missing');
 
+    const decoder = new TextDecoder();
+    let pending = '';
+    let output = '';
+
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      pending += decoder.decode(part.value, { stream: true });
+
+      const lines = pending.split('\n');
+      pending = lines.pop() || '';
+
+      for (const lineRaw of lines) {
+        const line = lineRaw.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+
+        let event;
+        try { event = JSON.parse(payload); } catch { continue; }
+
+        const delta = (event?.candidates?.[0]?.content?.parts || [])
+          .map(p => p?.text || '')
+          .join('');
+        if (delta) output += delta;
+      }
+    }
+
+    output = output.trim();
     if (!output) throw new Error('gemini_empty_response');
-    return { ...parseMiniJsJson(output), model, provider: 'gemini' };
+
+    if (output === '__NO_REPLY__') {
+      return {
+        should_reply: false,
+        reply: '',
+        emotion: 'normal',
+        animation: 'idle',
+        priority: 1,
+        model,
+        provider: 'gemini-stream'
+      };
+    }
+
+    const hostile = isHostileToVerityOrJs(safeComment);
+    return {
+      should_reply: true,
+      reply: output.slice(0, 220),
+      emotion: hostile ? 'serio' : 'normal',
+      animation: hostile ? 'shake' : 'idle',
+      priority: hostile ? 5 : 2,
+      model,
+      provider: 'gemini-stream'
+    };
   };
 
   let lastError = null;
@@ -821,18 +862,8 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
     }
   }
 
-  // In a hostile LIVE comment, prioritize speed: if KIE failed, answer locally now.
-  if (isHostileToVerityOrJs(safeComment) && lastError) {
-    return {
-      should_reply: true,
-      reply: hostileFallbackReply(safeComment),
-      emotion: 'serio',
-      animation: 'shake',
-      priority: 5,
-      model: 'local-defense',
-      provider: 'local'
-    };
-  }
+  // Gemini fallback keeps AI quality if KIE fails.
+  // Local fallback is reserved only for total provider failure.
 
   // Gemini fallbacks, one attempt each to avoid long waits in a LIVE.
   if (GEMINI_API_KEY) {
