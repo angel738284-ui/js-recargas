@@ -657,6 +657,7 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   }
 
   const safeComment = String(comment || '').trim().slice(0, 500);
+  const forceReply = Boolean(options.forceReply);
   const safeUser = String(username || '').trim().replace(/^@/, '').slice(0, 80);
   const safeDisplay = String(displayName || '').trim().slice(0, 80);
   if (!safeComment) throw new Error('comment_required');
@@ -686,7 +687,8 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   const requestKie = async (model) => {
     const fastInstruction =
       '\n\nMODO STREAMING LIVE: no devuelvas JSON. Respondé SOLO con la frase exacta que Verity dirá. ' +
-      'Si no conviene responder, escribí exactamente __NO_REPLY__. Mantené la personalidad y el contexto.';
+      (forceReply ? 'ESTA ES UNA PRUEBA MANUAL: respondé SIEMPRE y nunca escribas __NO_REPLY__. ' : 'Si no conviene responder, escribí exactamente __NO_REPLY__. ') +
+      'Mantené la personalidad y el contexto.';
 
     const r = await fetch('https://api.kie.ai/codex/v1/responses', {
       method: 'POST',
@@ -773,7 +775,8 @@ async function miniJsThink(comment, username = '', displayName = '', options = {
   const requestGemini = async (model) => {
     const fastInstruction =
       '\n\nMODO STREAMING LIVE: no devuelvas JSON. Respondé SOLO con la frase exacta que Verity dirá. ' +
-      'Si no conviene responder, escribí exactamente __NO_REPLY__. Mantené la personalidad, la memoria y el contexto.';
+      (forceReply ? 'ESTA ES UNA PRUEBA MANUAL: respondé SIEMPRE y nunca escribas __NO_REPLY__. ' : 'Si no conviene responder, escribí exactamente __NO_REPLY__. ') +
+      'Mantené la personalidad, la memoria y el contexto.';
 
     const r = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' +
@@ -3769,7 +3772,7 @@ const server = http.createServer(async (req, res) => {
       const hostile = isHostileToVerityOrJs(comment);
       let thought;
       try {
-        thought = await miniJsThink(comment, username);
+        thought = await miniJsThink(comment, username, username, { forceReply:true });
       } catch (e) {
         if (!hostile) throw e;
         thought = {
