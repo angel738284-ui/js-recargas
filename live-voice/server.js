@@ -1294,6 +1294,80 @@ async function processTikTokComment(comment, username, displayName = '') {
   }
 }
 
+async function processTikTokGift({username='', displayName='', giftName='Regalo', repeatCount=1, diamondCount=0}={}) {
+  const safeUser = String(username || '').trim().slice(0,80);
+  const safeDisplay = String(displayName || safeUser || 'amigo').trim().slice(0,80);
+  const safeGift = String(giftName || 'Regalo').trim().slice(0,80);
+  const count = Math.max(1, Number(repeatCount)||1);
+  const diamonds = Math.max(0, Number(diamondCount)||0);
+  const spokenName = safeNameForSpeech(safeDisplay, safeUser) || 'amigo';
+
+  const giftPrompt =
+    'EVENTO DE REGALO DEL LIVE. ' + spokenName + ' te acaba de regalar ' +
+    (count > 1 ? (count + ' ' + safeGift) : safeGift) +
+    (diamonds > 0 ? (' (' + diamonds + ' diamantes cada uno)') : '') +
+    '. TENÉS QUE AGRADECERLE SIEMPRE. ' +
+    'Decí su nombre una vez. Hacé un agradecimiento corto, natural, personalizado y con personalidad de Verity. ' +
+    'No confundas a ' + spokenName + ' con JS. Si el regalo es grande o son muchos, mostrate más emocionado.';
+
+  let thought;
+  try {
+    thought = await miniJsThink(giftPrompt, safeUser, safeDisplay);
+  } catch {
+    thought = {
+      should_reply:true,
+      reply: spokenName + ', gracias por ' + (count>1 ? ('esos ' + count + ' ' + safeGift) : ('ese ' + safeGift)) + ', máquina.',
+      model:'gift-fallback',
+      provider:'local'
+    };
+  }
+
+  let reply = String(thought?.reply || '').trim();
+  if (!reply) {
+    reply = spokenName + ', gracias por ' + (count>1 ? ('esos ' + count + ' ' + safeGift) : ('ese ' + safeGift)) + ', máquina.';
+  }
+
+  if (!reply.toLowerCase().includes(spokenName.toLowerCase())) {
+    reply = spokenName + ', ' + reply;
+  }
+
+  const speechText = sanitizeMiniJsSpeech(reply);
+  const audioUrl = await makeCommentVoice(speechText);
+  const at = Date.now();
+  const bigGift = diamonds >= 100 || count >= 10;
+
+  broadcast({
+    type:'audio',
+    url:audioUrl,
+    text:reply,
+    spoken_text:speechText,
+    source:'verity-tiktok-reply',
+    voice:'verity',
+    emotion: bigGift ? 'emocionado' : 'divertido',
+    animation: bigGift ? 'hype' : 'nod',
+    username:safeUser,
+    displayName:safeDisplay,
+    giftName:safeGift,
+    repeatCount:count,
+    diamondCount:diamonds,
+    gift:true,
+    at
+  });
+
+  broadcast({
+    type:'tiktok_gift_thanks',
+    username:safeUser,
+    displayName:safeDisplay,
+    giftName:safeGift,
+    repeatCount:count,
+    diamondCount:diamonds,
+    reply,
+    at
+  });
+
+  return {reply,audioUrl};
+}
+
 async function connectTikTokLive(username) {
   const clean = cleanTikTokUsername(username);
   if (!clean) throw new Error('tiktok_username_required');
@@ -1374,6 +1448,17 @@ async function connectTikTokLive(username) {
       repeatCount,
       diamondCount,
       at: Date.now()
+    });
+
+    processTikTokGift({
+      username,
+      displayName,
+      giftName,
+      repeatCount,
+      diamondCount
+    }).catch(e=>{
+      tiktokState.error=String(e?.message||e).slice(0,300);
+      broadcast({type:'tiktok_error',error:tiktokState.error,at:Date.now()});
     });
   });
 
@@ -2644,6 +2729,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
   <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
   <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
+  <button id="giftTestBtn">🎁 Probar regalo (Rosa)</button>
   <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
   <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a /verity, que ahora incluye imagen + voz.</div>
   <button id="copyCommentsUrl">📋 Copiar Verity imagen + voz para PRISM</button>
@@ -2695,6 +2781,7 @@ const clearReader=document.getElementById('clearReader');
 const readerTestName=document.getElementById('readerTestName');
 const readerTestComment=document.getElementById('readerTestComment');
 const readerTestCommentBtn=document.getElementById('readerTestCommentBtn');
+const giftTestBtn=document.getElementById('giftTestBtn');
 const dramaTestBtn=document.getElementById('dramaTestBtn');
 const readerTestStatus=document.getElementById('readerTestStatus');
 const copyCommentsUrl=document.getElementById('copyCommentsUrl');
@@ -2917,6 +3004,26 @@ dramaTestBtn.onclick=async()=>{
     readerTestStatus.textContent='❌ Drama 3: '+String(e.message||e);
   }finally{
     dramaTestBtn.disabled=false;
+  }
+};
+
+giftTestBtn.onclick=async()=>{
+  giftTestBtn.disabled=true;
+  readerTestStatus.textContent='🎁 Probando agradecimiento por una Rosa…';
+  try{
+    const j=await api('/api/tiktok/gift/test',{
+      username:readerTestName.value.trim()||'lucas_ff',
+      displayName:readerTestName.value.trim()||'Lucas',
+      giftName:'Rosa',
+      repeatCount:1,
+      diamondCount:1
+    });
+    if(j.audio_url)await playLocalVerity(j.audio_url);
+    readerTestStatus.textContent='✅ Verity agradeció: “'+j.reply+'”';
+  }catch(e){
+    readerTestStatus.textContent='❌ '+String(e.message||e);
+  }finally{
+    giftTestBtn.disabled=false;
   }
 };
 
@@ -3393,6 +3500,23 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, name, comment });
     } catch (e) {
       return json(res, 500, { ok: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/tiktok/gift/test') {
+    if (!isControllerAuthorized(req)) return json(res, 401, { ok:false, error:'unauthorized' });
+    const body = await readJson(req);
+    try {
+      const out = await processTikTokGift({
+        username: body.username || 'lucas_ff',
+        displayName: body.displayName || body.username || 'Lucas',
+        giftName: body.giftName || 'Rosa',
+        repeatCount: body.repeatCount || 1,
+        diamondCount: body.diamondCount || 1
+      });
+      return json(res, 200, { ok:true, reply:out.reply, audio_url:out.audioUrl });
+    } catch (e) {
+      return json(res, 500, { ok:false, error:String(e?.message||e) });
     }
   }
 
