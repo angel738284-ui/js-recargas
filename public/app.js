@@ -7,6 +7,31 @@ let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),toastTimer;
 const show=name=>['home','lobby','call'].forEach(x=>$(x).classList.toggle('hidden',x!==name));
 const toast=message=>{const t=$('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),4200)};
 const invite=()=>location.origin+'/s/'+roomId;
+function setCallAudioSession(active){
+  try {
+    if('audioSession' in navigator) navigator.audioSession.type=active?'play-and-record':'auto';
+  } catch(e){console.debug('AudioSession:',e.message)}
+  if(!('mediaSession' in navigator))return;
+  try{
+    const ms=navigator.mediaSession;
+    if(active){
+      ms.metadata=new MediaMetadata({title:roomState?.name||'Llamada de voz',artist:'JS VOICE',album:'Llamada grupal'});
+      ms.playbackState='playing';
+      try{ms.setActionHandler('hangup',()=>leave())}catch{}
+      try{ms.setActionHandler('togglemicrophone',()=>toggleMicrophone())}catch{}
+    }else{
+      ms.playbackState='none';
+      ms.metadata=null;
+      try{ms.setActionHandler('hangup',null)}catch{}
+      try{ms.setActionHandler('togglemicrophone',null)}catch{}
+    }
+  }catch(e){console.debug('MediaSession:',e.message)}
+}
+async function toggleMicrophone(){
+ if(!liveRoom)return;
+ try{await liveRoom.localParticipant.setMicrophoneEnabled(!micOn);micOn=!micOn;updateMic()}
+ catch(e){toast('Error al silenciar: '+e.message)}
+}
 async function api(path,options){const response=await fetch(path,options),json=await response.json();if(!response.ok)throw Error(json.error||'Error de servidor');return json}
 function info(){
  if(!roomState)return;
@@ -43,6 +68,7 @@ function waitlist(list){
 }
 async function leave(){
  joined=false;const oldRoom=liveRoom,oldSocket=socket;liveRoom=null;socket=null;
+ setCallAudioSession(false);
  try{await oldRoom?.disconnect()}catch{} oldSocket?.disconnect();
  audioTracks.clear();speakers.clear();micOn=false;myId=null;host=false;members=[];$('remoteAudio').replaceChildren();
  if(roomId)await lobby();else show('home');
@@ -60,12 +86,13 @@ async function joinVoice(payload){
  liveRoom.on(LK.RoomEvent.ActiveSpeakersChanged,all=>{speakers=new Set(all.map(x=>x.identity));people()});
  liveRoom.on(LK.RoomEvent.Disconnected,()=>{if(joined){toast('Se cortó la conexión de voz');leave()}});
  await liveRoom.connect(payload.livekitUrl,payload.token);
- joined=true;show('call');info();people();
+ joined=true;show('call');info();people();setCallAudioSession(true);
  try{await liveRoom.localParticipant.setMicrophoneEnabled(true);micOn=true}catch{micOn=false;toast('Autorizá el micrófono desde el navegador')}
  updateMic();
  try{await liveRoom.startAudio()}catch{toast('Si no escuchás, tocá Escuchar')}
 }
-function updateMic(){const b=$('micBtn');b.classList.toggle('active',!micOn);b.querySelector('.control-icon').textContent=micOn?'🎙️':'🔇';b.lastElementChild.textContent=micOn?'Micrófono':'Silenciado'}
+function updateMic(){try{navigator.mediaSession?.setMicrophoneActive?.(micOn)}catch{}
+ const b=$('micBtn');b.classList.toggle('active',!micOn);b.querySelector('.control-icon').textContent=micOn?'🎙️':'🔇';b.lastElementChild.textContent=micOn?'Micrófono':'Silenciado'}
 async function lobby(){
  show('lobby');$('lobbyMessage').textContent='';$('joinBtn').disabled=false;
  try{roomState=await api('/api/rooms/'+roomId);
@@ -114,9 +141,19 @@ function requestJoin(){
  socket.on('disconnect',()=>{if(joined){toast('Se perdió la conexión');leave()}else if(socket){done=false;fail('Se desconectó el servidor. Intentá de nuevo.') }});
  socket.on('connect_error',e=>{fail('No conecta con el servidor ('+(e?.message||'error')+'). Reintentá.')});
 }
+document.addEventListener('visibilitychange',async()=>{
+ if(document.visibilityState!=='visible'||!joined||!liveRoom)return;
+ try{await liveRoom.startAudio()}catch{}
+ for(const audio of audioTracks.values()){
+   try{if(audio.paused)await audio.play()}catch{}
+ }
+ try{
+   if(liveRoom.state==='disconnected')toast('La llamada se desconectó mientras estaba en segundo plano.');
+ }catch{}
+});
 $('createBtn').onclick=create;$('joinBtn').onclick=requestJoin;
 $('nickname').onkeydown=e=>{if(e.key==='Enter'&&!$('joinBtn').disabled)requestJoin()};
-$('micBtn').onclick=async()=>{if(!liveRoom)return;try{await liveRoom.localParticipant.setMicrophoneEnabled(!micOn);micOn=!micOn;updateMic()}catch(e){toast('Error al silenciar: '+e.message)}};
+$('micBtn').onclick=toggleMicrophone;
 $('audioBtn').onclick=async()=>{try{await liveRoom?.startAudio();toast('Audio activado')}catch(e){toast(e.message)}};
 $('shareBtn').onclick=async()=>{try{if(navigator.share)await navigator.share({title:'Entrá a JS VOICE',url:invite()});else if(navigator.clipboard){await navigator.clipboard.writeText(invite());toast('Enlace copiado')}else prompt('Copiá el enlace:',invite())}catch(e){if(e.name!=='AbortError')prompt('Copiá el enlace:',invite())}};
 $('leaveBtn').onclick=leave;
