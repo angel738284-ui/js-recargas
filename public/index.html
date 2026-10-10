@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#121327"><title>JS VOICE | Llamadas privadas</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="shell">
+<header class="top"><div class="brand"><span class="logo">🎧</span>JS <b>VOICE</b></div><span class="pill">Solo audio</span></header>
+<section id="home" class="view hidden">
+  <div class="hero"><div class="eyebrow">HABLÁ CON LOS TUYOS</div><h1>Una llamada.<br><em>Todos tus amigos.</em></h1><p>Creá una sala y compartí el enlace. Hasta 12 personas, sin cuentas.</p></div>
+  <div class="panel"><h2>Crear una sala</h2><label for="roomName">Nombre de la sala</label><input id="roomName" maxlength="24" value="Sala de amigos">
+  <label>Acceso a la sala</label>
+  <div class="choices">
+    <label class="choice"><input name="mode" type="radio" value="open" checked><span><b>🔗 Por enlace</b><small>Entran directamente al abrirlo</small></span></label>
+    <label class="choice"><input name="mode" type="radio" value="private"><span><b>🔒 Con aprobación</b><small>Vos aceptás a cada participante</small></span></label>
+  </div>
+  <button class="primary full" id="createBtn">Crear llamada →</button><p class="help">Solo quien tenga el enlace conoce la sala.</p></div>
+</section>
+<section id="lobby" class="view hidden"><div class="panel">
+  <div class="round-icon">🎙️</div><p class="eyebrow" id="lobbyMode">SALA POR ENLACE</p><h1 id="lobbyTitle">Sala de amigos</h1><p id="lobbyInfo" class="muted">Ingresá tu nombre para entrar.</p>
+  <label for="nickname">Tu nombre</label><input maxlength="24" id="nickname" placeholder="¿Cómo querés aparecer?">
+  <button id="joinBtn" class="primary full">Entrar a la llamada →</button><p class="help" id="lobbyMessage"></p>
+  <a href="/" class="back">← Crear otra sala</a>
+</div></section>
+<section id="call" class="view hidden">
+ <div class="eyebrow connected">● EN LLAMADA</div><h1 id="callTitle">Sala de amigos</h1><p id="callMeta" class="muted">0/12 conectados</p>
+ <div class="panel"><div class="panel-top"><h2>Participantes</h2><small>🎤 En vivo</small></div><div id="participants" class="participants"></div></div>
+ <div class="toolbar">
+  <button id="micBtn" class="control"><span class="control-icon">🎙️</span><span>Micrófono</span></button>
+  <button id="shareBtn" class="control"><span class="control-icon">🔗</span><span>Compartir</span></button>
+  <button id="audioBtn" class="control"><span class="control-icon">🔊</span><span>Escuchar</span></button>
+  <button id="leaveBtn" class="control danger"><span class="control-icon">📵</span><span>Salir</span></button>
+ </div>
+ <div class="panel hidden" id="hostTools">
+  <div class="panel-top"><h2>Administrar sala</h2><span class="pill">👑 Admin</span></div>
+  <div class="setting"><div><b>Permitir entrada</b><p class="muted small">Podés cambiar el modo</p></div><select id="modeSelect"><option value="open">Por enlace</option><option value="private">Con aprobación</option></select></div>
+  <div class="setting"><div><b>Bloquear nuevos ingresos</b></div><button class="secondary" id="lockBtn">Bloquear</button></div>
+  <div class="hidden" id="waitingBox"><h3>Solicitudes pendientes</h3><div id="waitingList"></div></div>
+  <button class="outline-danger full" id="endBtn">Finalizar para todos</button>
+ </div>
+ <p class="help">Para evitar el eco, usá auriculares. En Android, el audio con la pantalla apagada depende del navegador.</p>
+</section>
+<div id="toast" class="toast hidden" role="status"></div><div id="remoteAudio" aria-hidden="true"></div>
+</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-2"></script></body></html>
