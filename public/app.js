@@ -3,7 +3,7 @@ const $=id=>document.getElementById(id);
 const roomId=location.pathname.match(/^\/s\/([\w-]+)$/)?.[1]||null;
 const hostStorageKey='jsvoice-host-'+roomId;
 let socket=null,liveRoom=null,roomState=null,members=[],myId=null,joined=false,host=false,micOn=false;
-let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),toastTimer;
+let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),personalMutes=new Set(),toastTimer;
 const show=name=>['home','lobby','call'].forEach(x=>$(x).classList.toggle('hidden',x!==name));
 const toast=message=>{const t=$('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),4200)};
 const invite=()=>location.origin+'/s/'+roomId;
@@ -47,13 +47,26 @@ function people(){
    const avatar=document.createElement('span');avatar.className='avatar';avatar.textContent=p.name.substring(0,1).toUpperCase();
    const details=document.createElement('div');details.className='participant-info';
    const title=document.createElement('div');title.className='participant-name';title.textContent=p.name+(p.identity===myId?' (vos)':'');
-   const meta=document.createElement('div');meta.className='participant-meta';meta.textContent=(p.host?'👑 Admin':'Invitado')+(speakers.has(p.identity)?' · Hablando':'');
+   const meta=document.createElement('div');meta.className='participant-meta';meta.textContent=(p.host?'👑 Admin':'Invitado')+(p.moderatorMuted?' · 🔇 Silenciado para todos':speakers.has(p.identity)?' · Hablando':'');
    details.append(title,meta);el.append(avatar,details);
    if(p.identity!==myId){
      const vol=document.createElement('input');vol.className='vol';vol.type='range';vol.min=0;vol.max=100;vol.value=volumes.get(p.identity)??100;vol.setAttribute('aria-label','Volumen de '+p.name);
      vol.oninput=()=>{const n=Number(vol.value);volumes.set(p.identity,n);const a=audioTracks.get(p.identity);if(a)a.volume=n/100};
      el.append(vol);
-     if(host){const kick=document.createElement('button');kick.className='kick';kick.textContent='Expulsar';kick.onclick=()=>{if(confirm('¿Expulsar a '+p.name+'?'))socket?.emit('kick-user',p.socketId)};el.append(kick)}
+     const personal=document.createElement('button');personal.className='kick';
+     personal.textContent=personalMutes.has(p.identity)?'🔊 Escuchar':'🔇 Solo para mí';
+     personal.onclick=()=>{
+       if(personalMutes.has(p.identity))personalMutes.delete(p.identity);else personalMutes.add(p.identity);
+       const a=audioTracks.get(p.identity);if(a)a.muted=personalMutes.has(p.identity);
+       people();
+     };
+     el.append(personal);
+     if(host){
+       const muteAll=document.createElement('button');muteAll.className='kick';
+       muteAll.textContent=p.moderatorMuted?'🎤 Habilitar para todos':'🔇 Silenciar para todos';
+       muteAll.onclick=()=>{if(confirm('¿'+(p.moderatorMuted?'Habilitar':'Silenciar')+' a '+p.name+' para todos?'))socket?.emit('host-set-mute',{socketId:p.socketId,muted:!p.moderatorMuted})};
+       el.append(muteAll);
+       const kick=document.createElement('button');kick.className='kick';kick.textContent='Expulsar';kick.onclick=()=>{if(confirm('¿Expulsar a '+p.name+'?'))socket?.emit('kick-user',p.socketId)};el.append(kick)}
    }
    box.append(el);
  }
@@ -70,11 +83,11 @@ async function leave(){
  joined=false;const oldRoom=liveRoom,oldSocket=socket;liveRoom=null;socket=null;
  setCallAudioSession(false);
  try{await oldRoom?.disconnect()}catch{} oldSocket?.disconnect();
- audioTracks.clear();speakers.clear();micOn=false;myId=null;host=false;members=[];$('remoteAudio').replaceChildren();
+ audioTracks.clear();speakers.clear();personalMutes.clear();micOn=false;myId=null;host=false;members=[];$('remoteAudio').replaceChildren();
  if(roomId)await lobby();else show('home');
 }
 function attach(track,participant){
- const el=track.attach();el.autoplay=true;el.playsInline=true;el.volume=(volumes.get(participant.identity)??100)/100;
+ const el=track.attach();el.autoplay=true;el.playsInline=true;el.volume=(volumes.get(participant.identity)??100)/100;el.muted=personalMutes.has(participant.identity);
  audioTracks.set(participant.identity,el);$('remoteAudio').append(el);
 }
 async function joinVoice(payload){
@@ -129,7 +142,12 @@ function requestJoin(){
  });
  socket.on('join-pending',()=>{done=true;cancelTimer();$('lobbyMessage').textContent='⏳ Esperando aprobación del administrador…'});
  socket.on('join-error',msg=>{done=false;fail(String(msg||'No se pudo entrar'))});
- socket.on('room-state',state=>{roomState=state;members=state.members||[];info();if(joined)people()});
+ socket.on('room-state',state=>{roomState=state;members=state.members||[];info();if(joined){people();updateMic()}});
+ socket.on('moderator-mute-changed',async ({muted}={})=>{
+   if(muted){try{await liveRoom?.localParticipant.setMicrophoneEnabled(false)}catch{}micOn=false;updateMic()}
+   toast(muted?'El administrador silenció tu micrófono':'El administrador habilitó tu micrófono');
+ });
+ socket.on('moderator-mute-error',msg=>toast(msg||'No se pudo modificar el micrófono'));
  socket.on('waiting-state',waitlist);
  socket.on('join-approved',async payload=>{
    done=true;cancelTimer();$('lobbyMessage').textContent='Conectando audio…';
@@ -153,7 +171,7 @@ document.addEventListener('visibilitychange',async()=>{
 });
 $('createBtn').onclick=create;$('joinBtn').onclick=requestJoin;
 $('nickname').onkeydown=e=>{if(e.key==='Enter'&&!$('joinBtn').disabled)requestJoin()};
-$('micBtn').onclick=toggleMicrophone;
+$('micBtn').onclick=()=>{if(roomState?.members?.find(m=>m.identity===myId)?.moderatorMuted)return toast('El administrador silenció tu micrófono');toggleMicrophone()};
 $('audioBtn').onclick=async()=>{try{await liveRoom?.startAudio();toast('Audio activado')}catch(e){toast(e.message)}};
 $('shareBtn').onclick=async()=>{try{if(navigator.share)await navigator.share({title:'Entrá a JS VOICE',url:invite()});else if(navigator.clipboard){await navigator.clipboard.writeText(invite());toast('Enlace copiado')}else prompt('Copiá el enlace:',invite())}catch(e){if(e.name!=='AbortError')prompt('Copiá el enlace:',invite())}};
 $('leaveBtn').onclick=leave;

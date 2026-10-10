@@ -41,7 +41,7 @@ app.post('/api/rooms',(req,res)=>{
 });
 function publish(r){
   r.last=Date.now();
-  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host}))});
+  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted)}))});
   for(const [sid,u] of r.users) if(u.host)
     io.to(sid).emit('waiting-state',[...r.waiting.entries()].map(([socketId,p])=>({socketId,name:p.name})));
 }
@@ -65,7 +65,7 @@ async function admit(r,s,name,host=false){
     tok.addGrant({roomJoin:true,room:'jsvoice-'+r.id,canPublish:true,canSubscribe:true,canPublishData:false});
     const jwt=await tok.toJwt();
     r.waiting.delete(s.id);
-    r.users.set(s.id,{identity,name,host});
+    r.users.set(s.id,{identity,name,host,moderatorMuted:false});
     s.data.room=r.id;s.data.role=host?'host':'guest';s.join(r.id);
     s.emit('join-approved',{token:jwt,livekitUrl:url,identity,name,host});
     publish(r);
@@ -101,6 +101,22 @@ io.on('connection',s=>{
     if(!u||!target)return;
     try{await voice?.removeParticipant('jsvoice-'+r.id,u.identity)}catch(e){console.error(e?.message)}
     target.emit('kicked');target.disconnect(true);r.users.delete(sid);publish(r);
+  });
+  s.on('host-set-mute',async({socketId,muted}={})=>{
+    if(s.data.role!=='host')return;
+    const r=rooms.get(s.data.room);
+    const target=r?.users.get(String(socketId||''));
+    if(!target||target.host||socketId===s.id||typeof muted!=='boolean')return;
+    if(target.moderatorMuted===muted)return publish(r);
+    try{
+      await voice.updateParticipant('jsvoice-'+r.id,target.identity,{
+        permission:{canPublish:!muted,canSubscribe:true,canPublishData:false}
+      });
+      if(rooms.get(r.id)!==r||r.users.get(socketId)!==target)return;
+      target.moderatorMuted=muted;
+      io.to(socketId).emit('moderator-mute-changed',{muted});
+      publish(r);
+    }catch(e){console.error('Moderación de audio:',e?.message);s.emit('moderator-mute-error','No se pudo actualizar el micrófono. Reintentá.')}
   });
   s.on('end-room',async()=>{
     if(s.data.role!=='host')return;
