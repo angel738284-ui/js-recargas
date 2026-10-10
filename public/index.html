@@ -10,7 +10,10 @@
     <label class="choice"><input name="mode" type="radio" value="open" checked><span><b>🔗 Por enlace</b><small>Entran directamente al abrirlo</small></span></label>
     <label class="choice"><input name="mode" type="radio" value="private"><span><b>🔒 Con aprobación</b><small>Vos aceptás a cada participante</small></span></label>
   </div>
-  <button class="primary full" id="createBtn">Crear llamada →</button><p class="help">Solo quien tenga el enlace conoce la sala.</p></div>
+  <button class="primary full" id="createBtn">Crear llamada →</button><p class="help">Compartí el código o el enlace. Las salas privadas requieren aprobación.</p></div>
+  <div class="panel"><h2>Entrar con código</h2><label for="joinCode">Código de sala</label>
+  <input id="joinCode" maxlength="120" placeholder="Ej: ABCD 7K92" autocomplete="off" autocapitalize="characters">
+  <button class="primary full" id="joinCodeBtn">Entrar a una sala →</button></div>
 </section>
 <section id="lobby" class="view hidden"><div class="panel">
   <div class="round-icon">🎙️</div><p class="eyebrow" id="lobbyMode">SALA POR ENLACE</p><h1 id="lobbyTitle">Sala de amigos</h1><p id="lobbyInfo" class="muted">Ingresá tu nombre para entrar.</p>
@@ -20,6 +23,8 @@
 </div></section>
 <section id="call" class="view hidden">
  <div class="eyebrow connected">● EN LLAMADA</div><h1 id="callTitle">Sala de amigos</h1><p id="callMeta" class="muted">0/12 conectados</p>
+ <div class="panel"><div class="eyebrow">CÓDIGO DE SALA</div><h2 id="codeDisplay" style="letter-spacing:.12em;margin:.4em 0;font-size:1.7rem">—</h2>
+ <button class="secondary" id="copyCodeBtn">📋 Copiar código</button><p class="help">Tus amigos pueden pegarlo al entrar en JS VOICE.</p></div>
  <div class="panel"><div class="panel-top"><h2>Participantes</h2><small>🎤 En vivo</small></div><div id="participants" class="participants"></div></div>
  <div class="toolbar">
   <button id="micBtn" class="control"><span class="control-icon">🎙️</span><span>Micrófono</span></button>
@@ -37,4 +42,4 @@
  <p class="help">Para evitar el eco, usá auriculares. En Android, el audio con la pantalla apagada depende del navegador.</p>
 </section>
 <div id="toast" class="toast hidden" role="status"></div><div id="remoteAudio" aria-hidden="true"></div>
-</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-4"></script></body></html>
+</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-5"></script></body></html>

@@ -16,7 +16,13 @@ const url = process.env.LIVEKIT_URL || '';
 const ready = Boolean(url && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
 const voice = ready ? new RoomServiceClient(url.replace(/^wss:/,'https:').replace(/^ws:/,'http:'),process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET) : null;
 const clean = s => String(s||'').trim().slice(0,24).replace(/[<>]/g,'') || 'Invitado';
-const rid = () => randomBytes(12).toString('base64url');
+const CODE_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const rid=()=>{
+  let id;
+  do { id=Array.from(randomBytes(8), n=>CODE_CHARS[n % CODE_CHARS.length]).join(''); }
+  while(rooms.has(id));
+  return id;
+};
 const mode = v => v==='private'?'private':'open';
 const info = r => ({id:r.id,name:r.name,mode:r.mode,locked:r.locked,count:r.users.size,capacity:LIMIT});
 app.disable('x-powered-by');

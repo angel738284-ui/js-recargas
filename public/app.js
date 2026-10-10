@@ -7,6 +7,7 @@ let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),personalMutes=new
 const show=name=>['home','lobby','call'].forEach(x=>$(x).classList.toggle('hidden',x!==name));
 const toast=message=>{const t=$('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),4200)};
 const invite=()=>location.origin+'/s/'+roomId;
+const prettyCode=code=>code.length===8?code.slice(0,4)+' '+code.slice(4):code;
 function setCallAudioSession(active){
   try {
     if('audioSession' in navigator) navigator.audioSession.type=active?'play-and-record':'auto';
@@ -38,6 +39,7 @@ function info(){
  $('callTitle').textContent=roomState.name;
  $('callMeta').textContent=roomState.count+'/12 conectados · '+(roomState.locked?'Bloqueada':roomState.mode==='private'?'Con aprobación':'Acceso directo');
  $('modeSelect').value=roomState.mode;$('lockBtn').textContent=roomState.locked?'Desbloquear':'Bloquear';
+ $('codeDisplay').textContent=prettyCode(roomId);
 }
 function people(){
  const box=$('participants');box.replaceChildren();
@@ -170,6 +172,20 @@ document.addEventListener('visibilitychange',async()=>{
  }catch{}
 });
 $('createBtn').onclick=create;$('joinBtn').onclick=requestJoin;
+if($('joinCodeBtn')){
+ const enterCode=()=>{
+   const raw=$('joinCode').value.trim();
+   const code=raw.replace(/[\s-]/g,'').toUpperCase();
+   if(!/^[A-Z2-9]{8}$/.test(code)&&!/^[A-Za-z0-9_-]{8,80}$/.test(raw))return toast('Pegá un código de sala válido');
+   location.assign('/s/'+(code.length===8?code:raw));
+ };
+ $('joinCodeBtn').onclick=enterCode;
+ $('joinCode').onkeydown=e=>{if(e.key==='Enter')enterCode()};
+}
+if($('copyCodeBtn'))$('copyCodeBtn').onclick=async()=>{
+ try{await navigator.clipboard.writeText(roomId);toast('Código copiado: '+roomId)}
+ catch{prompt('Copiá el código:',roomId)}
+};
 $('nickname').onkeydown=e=>{if(e.key==='Enter'&&!$('joinBtn').disabled)requestJoin()};
 $('micBtn').onclick=()=>{if(roomState?.members?.find(m=>m.identity===myId)?.moderatorMuted)return toast('El administrador silenció tu micrófono');toggleMicrophone()};
 $('audioBtn').onclick=async()=>{try{await liveRoom?.startAudio();toast('Audio activado')}catch(e){toast(e.message)}};
