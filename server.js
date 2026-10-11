@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Server as SocketServer } from 'socket.io';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import accountRouter from './accounts.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const app = express(), httpServer = http.createServer(app);
@@ -39,7 +40,8 @@ const publicRoom = r=>({...info(r),createdAt:r.createdAt});
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(compression({threshold:1024}));
-app.use(express.json({limit:'8kb'}));
+app.use(express.json({limit:'14kb'}));
+app.use('/api/account',accountRouter);
 app.get('/.well-known/assetlinks.json',(_req,res)=>{
   res.type('application/json');
   res.set('Cache-Control','public, max-age=3600');
