@@ -1,0 +1,19 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.jsff.voice",
+      "sha256_cert_fingerprints": [
+        "92:17:6F:17:82:BB:1A:25:A8:17:32:97:80:E6:67:A9:B5:4C:B4:2B:0A:FF:5F:CA:7F:3E:2F:75:DF:A6:87:06",
+        "2B:F9:D2:52:F7:DE:BF:25:88:94:31:98:83:EC:EC:F6:E7:08:36:41:13:FA:11:BD:A8:73:19:85:3B:BC:3E:13",
+        "C8:EF:FE:12:98:EE:32:2D:0C:9C:C2:F0:55:79:5B:74:CE:7B:3D:09:50:0A:8E:AE:BB:FD:B9:8D:99:9B:E1:BD",
+        "5B:ED:E8:3F:EC:F2:3B:35:D4:A9:E8:5C:F6:68:F0:A5:C9:77:DF:94:23:87:E6:C0:5F:70:93:D7:A0:B5:E1:24",
+        "D3:B7:51:DC:7B:4F:05:66:9F:CE:27:1A:2D:32:8B:04:4F:1A:B7:2E:1C:EA:95:E5:35:5B:C8:A7:62:B4:D7:50",
+        "33:90:AF:F5:74:1D:BC:0E:3D:F9:3E:FB:35:44:94:06:FB:0F:94:5E:B0:21:06:8E:30:6F:38:1D:EA:0D:F3:27"
+      ]
+    }
+  }
+]

@@ -29,6 +29,11 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(compression({threshold:1024}));
 app.use(express.json({limit:'8kb'}));
+app.get('/.well-known/assetlinks.json',(_req,res)=>{
+  res.type('application/json');
+  res.set('Cache-Control','public, max-age=3600');
+  res.sendFile(path.join(root,'public/.well-known/assetlinks.json'));
+});
 app.use(express.static(path.join(root,'public'),{maxAge:'10m',setHeaders:(res,p)=>{if(p.endsWith('index.html'))res.setHeader('Cache-Control','no-cache')}}));
 app.get('/vendor/livekit.min.js',(_q,res)=>res.sendFile(path.join(root,'node_modules/livekit-client/dist/livekit-client.umd.js'),{maxAge:'7d'}));
 app.get('/health',(_q,res)=>res.json({ok:true,voiceConfigured:ready,activeRooms:rooms.size}));
