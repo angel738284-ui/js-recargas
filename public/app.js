@@ -3,7 +3,7 @@ const $=id=>document.getElementById(id);
 const roomId=location.pathname.match(/^\/s\/([\w-]+)$/)?.[1]||null;
 const hostStorageKey='jsvoice-host-'+roomId;
 let socket=null,liveRoom=null,roomState=null,members=[],myId=null,joined=false,host=false,micOn=false;
-let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),personalMutes=new Set(),toastTimer;
+let speakers=new Set(),audioTracks=new Map(),volumes=new Map(),personalMutes=new Set(),toastTimer, directoryLoading=false;
 const show=name=>['home','lobby','call'].forEach(x=>$(x).classList.toggle('hidden',x!==name));
 const toast=message=>{const t=$('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),4200)};
 const invite=()=>location.origin+'/s/'+roomId;
@@ -37,8 +37,8 @@ async function api(path,options){const response=await fetch(path,options),json=a
 function info(){
  if(!roomState)return;
  $('callTitle').textContent=roomState.name;
- $('callMeta').textContent=roomState.count+'/12 conectados · '+(roomState.locked?'Bloqueada':roomState.mode==='private'?'Con aprobación':'Acceso directo');
- $('modeSelect').value=roomState.mode;$('lockBtn').textContent=roomState.locked?'Desbloquear':'Bloquear';
+ $('callMeta').textContent=roomState.count+'/12 conectados · '+(roomState.locked?'Bloqueada':roomState.mode==='private'?'Con aprobación':roomState.mode==='password'?'Con contraseña':'Acceso directo');
+ $('modeSelect').value=roomState.mode;$('lockBtn').textContent=roomState.locked?'Desbloquear':'Bloquear';$('listingBtn').textContent=roomState.listed?'Ocultar sala':'Mostrar sala';
  $('codeDisplay').textContent=prettyCode(roomId);
 }
 function people(){
@@ -112,7 +112,8 @@ async function lobby(){
  show('lobby');$('lobbyMessage').textContent='';$('joinBtn').disabled=false;
  try{roomState=await api('/api/rooms/'+roomId);
    $('lobbyTitle').textContent=roomState.name;
-   $('lobbyMode').textContent=roomState.mode==='private'?'🔒 CON APROBACIÓN':'🔗 POR ENLACE';
+   $('lobbyMode').textContent=roomState.mode==='private'?'✋ CON APROBACIÓN':roomState.mode==='password'?'🔐 CON CONTRASEÑA':'🔗 SALA PÚBLICA';
+   $('joinPasswordBox').classList.toggle('hidden',roomState.mode!=='password'||Boolean(localStorage.getItem(hostStorageKey)));
    $('lobbyInfo').textContent=roomState.count+'/12 conectados. '+(roomState.locked?'La sala está bloqueada.':'Escribí tu nombre para entrar.');
    $('joinBtn').disabled=(roomState.locked&&!localStorage.getItem(hostStorageKey))||!roomState.voiceConfigured;
    if(!roomState.voiceConfigured)$('lobbyMessage').textContent='Aún falta configurar LiveKit para activar las llamadas.';
@@ -121,7 +122,9 @@ async function lobby(){
 async function create(){
  const button=$('createBtn');button.disabled=true;
  try{const selected=document.querySelector('input[name="mode"]:checked').value;
- const r=await api('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomName:$('roomName').value,mode:selected})});
+ const pass=$('createPassword').value;
+ if(selected==='password' && (pass.length<6||pass.length>64))throw Error('Elegí una contraseña de 6 a 64 caracteres');
+ const r=await api('/api/rooms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomName:$('roomName').value,mode:selected,password:selected==='password'?pass:undefined,listed:$('listedRoom').checked})});
  localStorage.setItem('jsvoice-host-'+r.id,r.hostKey);location.assign('/s/'+r.id)}
  catch(e){toast(e.message);button.disabled=false}
 }
@@ -140,7 +143,7 @@ function requestJoin(){
  socket.on('connect',()=>{
    step='sala';cancelTimer();$('lobbyMessage').textContent='Verificando tu entrada…';
    timer=setTimeout(()=>fail('La sala no respondió. Tocá Entrar para reintentar.'),16000);
-   socket.emit('join-room',{roomId,name,hostKey:localStorage.getItem(hostStorageKey)||''});
+   socket.emit('join-room',{roomId,name,hostKey:localStorage.getItem(hostStorageKey)||'',password:$('joinPassword').value});
  });
  socket.on('join-pending',()=>{done=true;cancelTimer();$('lobbyMessage').textContent='⏳ Esperando aprobación del administrador…'});
  socket.on('join-error',msg=>{done=false;fail(String(msg||'No se pudo entrar'))});
@@ -150,6 +153,7 @@ function requestJoin(){
    toast(muted?'El administrador silenció tu micrófono':'El administrador habilitó tu micrófono');
  });
  socket.on('moderator-mute-error',msg=>toast(msg||'No se pudo modificar el micrófono'));
+ socket.on('room-settings-error',msg=>{toast(msg||'No se pudo modificar la sala');info()});
  socket.on('waiting-state',waitlist);
  socket.on('join-approved',async payload=>{
    done=true;cancelTimer();$('lobbyMessage').textContent='Conectando audio…';
@@ -192,7 +196,45 @@ $('audioBtn').onclick=async()=>{try{await liveRoom?.startAudio();toast('Audio ac
 $('shareBtn').onclick=async()=>{try{if(navigator.share)await navigator.share({title:'Entrá a JS VOICE',url:invite()});else if(navigator.clipboard){await navigator.clipboard.writeText(invite());toast('Enlace copiado')}else prompt('Copiá el enlace:',invite())}catch(e){if(e.name!=='AbortError')prompt('Copiá el enlace:',invite())}};
 $('leaveBtn').onclick=leave;
 $('modeSelect').onchange=()=>socket?.emit('set-mode',$('modeSelect').value);
+$('listingBtn').onclick=()=>socket?.emit('set-listed',!roomState?.listed);
+$('passwordBtn').onclick=()=>{
+ const pass=prompt('Nueva contraseña de sala (mínimo 6 caracteres):');
+ if(pass===null)return;
+ if(pass.length<6||pass.length>64)return toast('La clave debe tener entre 6 y 64 caracteres');
+ socket?.emit('set-password',pass);
+};
 $('lockBtn').onclick=()=>socket?.emit('set-lock',!roomState?.locked);
 $('endBtn').onclick=()=>{if(confirm('¿Cerrar la sala para todos?'))socket?.emit('end-room')};
-if(roomId){$('nickname').value=localStorage.getItem('jsvoice-name')||'';lobby()}else show('home');
+function refreshModeForm(){
+ const selected=document.querySelector('input[name="mode"]:checked')?.value||'open';
+ $('createPasswordBox').classList.toggle('hidden',selected!=='password');
+ if(selected==='private' && !$('listedRoom').dataset.touched)$('listedRoom').checked=false;
+ else if(selected!=='private' && !$('listedRoom').dataset.touched)$('listedRoom').checked=true;
+}
+document.querySelectorAll('input[name="mode"]').forEach(input=>input.onchange=refreshModeForm);
+$('listedRoom').onchange=()=>{$('listedRoom').dataset.touched='1'};
+refreshModeForm();
+async function loadDirectory(){
+ if(directoryLoading)return;directoryLoading=true;
+ const list=$('roomDirectory');
+ try {
+   const data=await api('/api/rooms');
+   list.replaceChildren();
+   if(!data.rooms.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='No hay salas visibles en este momento.';list.append(empty);return}
+   for(const r of data.rooms){
+     const el=document.createElement('div');el.className='participant';
+     const details=document.createElement('div');details.className='participant-info';
+     const heading=document.createElement('b');heading.textContent=(r.mode==='password'?'🔐 ':r.mode==='private'?'✋ ':'🎙️ ')+r.name;
+     const sub=document.createElement('div');sub.className='participant-meta';sub.textContent=r.count+'/12 · '+(r.locked?'Bloqueada':r.mode==='password'?'Con contraseña':r.mode==='private'?'Con aprobación':'Pública');
+     details.append(heading,sub);el.append(details);
+     const btn=document.createElement('button');btn.className='secondary';btn.textContent=r.locked||r.count>=r.capacity?'No disponible':'Entrar';btn.disabled=r.locked||r.count>=r.capacity;
+     btn.onclick=()=>location.assign('/s/'+encodeURIComponent(r.id));
+     el.append(btn);list.append(el);
+   }
+ }catch(e){list.textContent='No se pudieron cargar las salas. Tocá Actualizar.'}
+ finally{directoryLoading=false}
+}
+$('refreshRooms').onclick=loadDirectory;
+if(roomId){$('nickname').value=localStorage.getItem('jsvoice-name')||'';lobby()}else{show('home');loadDirectory()}
+
 })();

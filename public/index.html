@@ -8,16 +8,21 @@
   <label>Acceso a la sala</label>
   <div class="choices">
     <label class="choice"><input name="mode" type="radio" value="open" checked><span><b>🔗 Por enlace</b><small>Entran directamente al abrirlo</small></span></label>
-    <label class="choice"><input name="mode" type="radio" value="private"><span><b>🔒 Con aprobación</b><small>Vos aceptás a cada participante</small></span></label>
+    <label class="choice"><input name="mode" type="radio" value="password"><span><b>🔐 Con contraseña</b><small>Solo entran quienes conocen la contraseña</small></span></label>
+    <label class="choice"><input name="mode" type="radio" value="private"><span><b>✋ Con aprobación</b><small>El administrador acepta a cada persona</small></span></label>
   </div>
+  <div id="createPasswordBox" class="hidden"><label for="createPassword">Contraseña (mínimo 6 caracteres)</label><input id="createPassword" type="password" minlength="6" maxlength="64" autocomplete="new-password"></div>
+  <label class="choice"><input type="checkbox" id="listedRoom" checked><span><b>👀 Mostrar en Salas disponibles</b><small>Podés ocultar la sala aunque conozcan su código</small></span></label>
   <button class="primary full" id="createBtn">Crear llamada →</button><p class="help">Compartí el código o el enlace. Las salas privadas requieren aprobación.</p></div>
   <div class="panel"><h2>Entrar con código</h2><label for="joinCode">Código de sala</label>
   <input id="joinCode" maxlength="120" placeholder="Ej: ABCD 7K92" autocomplete="off" autocapitalize="characters">
   <button class="primary full" id="joinCodeBtn">Entrar a una sala →</button></div>
+  <div class="panel"><div class="panel-top"><h2>🎧 Salas disponibles</h2><button id="refreshRooms" class="secondary">Actualizar</button></div><p class="help">Salas visibles con lugar. Las privadas muestran un candado y requieren contraseña.</p><div id="roomDirectory" class="participants"><p class="muted">Cargando salas…</p></div></div>
 </section>
 <section id="lobby" class="view hidden"><div class="panel">
   <div class="round-icon">🎙️</div><p class="eyebrow" id="lobbyMode">SALA POR ENLACE</p><h1 id="lobbyTitle">Sala de amigos</h1><p id="lobbyInfo" class="muted">Ingresá tu nombre para entrar.</p>
   <label for="nickname">Tu nombre</label><input maxlength="24" id="nickname" placeholder="¿Cómo querés aparecer?">
+  <div id="joinPasswordBox" class="hidden"><label for="joinPassword">🔐 Contraseña de esta sala</label><input id="joinPassword" type="password" maxlength="64" placeholder="Contraseña del administrador" autocomplete="off"></div>
   <button id="joinBtn" class="primary full">Entrar a la llamada →</button><p class="help" id="lobbyMessage"></p>
   <a href="/" class="back">← Crear otra sala</a>
 </div></section>
@@ -34,7 +39,9 @@
  </div>
  <div class="panel hidden" id="hostTools">
   <div class="panel-top"><h2>Administrar sala</h2><span class="pill">👑 Admin</span></div>
-  <div class="setting"><div><b>Permitir entrada</b><p class="muted small">Podés cambiar el modo</p></div><select id="modeSelect"><option value="open">Por enlace</option><option value="private">Con aprobación</option></select></div>
+  <div class="setting"><div><b>Permitir entrada</b><p class="muted small">Podés cambiar el modo</p></div><select id="modeSelect"><option value="open">Por enlace</option><option value="private">Con aprobación</option><option value="password">Con contraseña</option></select></div>
+  <div class="setting"><div><b>Aparecer en Salas disponibles</b><p class="muted small">Podés ocultar la sala del listado</p></div><button class="secondary" id="listingBtn">Ocultar sala</button></div>
+  <div class="setting"><div><b>Contraseña de acceso</b><p class="muted small">Configurar o cambiar. Activa el modo contraseña.</p></div><button class="secondary" id="passwordBtn">Cambiar clave</button></div>
   <div class="setting"><div><b>Bloquear nuevos ingresos</b></div><button class="secondary" id="lockBtn">Bloquear</button></div>
   <div class="hidden" id="waitingBox"><h3>Solicitudes pendientes</h3><div id="waitingList"></div></div>
   <button class="outline-danger full" id="endBtn">Finalizar para todos</button>
@@ -42,4 +49,4 @@
  <p class="help">Para evitar el eco, usá auriculares. En Android, el audio con la pantalla apagada depende del navegador.</p>
 </section>
 <div id="toast" class="toast hidden" role="status"></div><div id="remoteAudio" aria-hidden="true"></div>
-</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-5"></script></body></html>
+</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-6"></script></body></html>

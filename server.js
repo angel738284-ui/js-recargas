@@ -4,7 +4,7 @@ import compression from 'compression';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Server as SocketServer } from 'socket.io';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 
@@ -23,8 +23,17 @@ const rid=()=>{
   while(rooms.has(id));
   return id;
 };
-const mode = v => v==='private'?'private':'open';
-const info = r => ({id:r.id,name:r.name,mode:r.mode,locked:r.locked,count:r.users.size,capacity:LIMIT});
+const mode = v => ['open','password','private'].includes(v)?v:'open';
+const hashPassword = (password,salt) => scryptSync(password,salt,32);
+const verifyPassword = (room,candidate) => {
+  if(!room.passwordHash||!room.passwordSalt||typeof candidate!=='string')return false;
+  if(candidate.length>64)return false;
+  return timingSafeEqual(hashPassword(candidate,room.passwordSalt),room.passwordHash);
+};
+const info = r => ({id:r.id,name:r.name,mode:r.mode,locked:r.locked,
+  listed:r.listed, passwordProtected:r.mode==='password',count:r.users.size,capacity:LIMIT});
+const publicRoom = r=>({...info(r),createdAt:r.createdAt});
+
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(compression({threshold:1024}));
@@ -38,15 +47,29 @@ app.use(express.static(path.join(root,'public'),{maxAge:'10m',setHeaders:(res,p)
 app.get('/vendor/livekit.min.js',(_q,res)=>res.sendFile(path.join(root,'node_modules/livekit-client/dist/livekit-client.umd.js'),{maxAge:'7d'}));
 app.get('/health',(_q,res)=>res.json({ok:true,voiceConfigured:ready,activeRooms:rooms.size}));
 app.get('/s/:id',(_q,res)=>res.sendFile(path.join(root,'public/index.html')));
+app.get('/api/rooms',(req,res)=>{
+  res.set('Cache-Control','no-store');
+  const now=Date.now();
+  const visible=[...rooms.values()].filter(r=>r.listed && (r.users.size>0 || now-r.createdAt<600000))
+    .sort((a,b)=>b.createdAt-a.createdAt).slice(0,50).map(publicRoom);
+  res.json({rooms:visible});
+});
 app.get('/api/rooms/:id',(req,res)=>{
   const r=rooms.get(req.params.id);
   if(!r) return res.status(404).json({error:'Sala no encontrada'});
   res.json({...info(r),voiceConfigured:ready});
 });
 app.post('/api/rooms',(req,res)=>{
-  const id=rid(), hostKey=randomBytes(32).toString('base64url');
-  const r={id,name:clean(req.body?.roomName || 'Sala de amigos'),mode:mode(req.body?.mode),
-    hostKey,locked:false,users:new Map(),waiting:new Map(),last:Date.now(),prepared:false,preparing:null};
+  const access=mode(req.body?.mode);
+  const password=req.body?.password;
+  if(access==='password' && (typeof password!=='string'||password.length<6||password.length>64))
+    return res.status(400).json({error:'La contraseña debe tener entre 6 y 64 caracteres'});
+  const id=rid(), hostKey=randomBytes(32).toString('base64url'), now=Date.now();
+  const salt=access==='password'?randomBytes(16):null;
+  const r={id,name:clean(req.body?.roomName || 'Sala de amigos'),mode:access,
+    hostKey,locked:false,listed:req.body?.listed===undefined?access!=='private':req.body.listed===true,
+    passwordSalt:salt,passwordHash:salt?hashPassword(password,salt):null,
+    users:new Map(),waiting:new Map(),last:now,createdAt:now,prepared:false,preparing:null};
   rooms.set(id,r);
   res.status(201).json({...info(r),hostKey,invite:`${req.protocol}://${req.get('host')}/s/${id}`});
 });
@@ -83,13 +106,25 @@ async function admit(r,s,name,host=false){
   }catch(e){console.error('LiveKit:',e?.message);s.emit('join-error','No se pudo conectar al servidor de voz');}
 }
 io.on('connection',s=>{
-  s.on('join-room',async({roomId,name,hostKey}={})=>{
+  s.on('join-room',async({roomId,name,hostKey,password}={})=>{
     if(s.data.room)return s.emit('join-error','Ya estás en una sala');
     const r=rooms.get(String(roomId||''));
     if(!r)return s.emit('join-error','La sala ya no existe');
     const owner=Boolean(hostKey&&hostKey===r.hostKey);
     if(r.locked&&!owner)return s.emit('join-error','La sala está bloqueada');
     if(r.users.size>=LIMIT)return s.emit('join-error','La sala está llena');
+    if(r.mode==='password'&&!owner){
+      const now=Date.now();
+      if(!s.data.passwordWindow || now-s.data.passwordWindow>60000){
+        s.data.passwordWindow=now;s.data.passwordAttempts=0;
+      }
+      if(s.data.passwordAttempts>=6)return s.emit('join-error','Demasiados intentos. Probá más tarde.');
+      if(!verifyPassword(r,password)){
+        s.data.passwordAttempts++;
+        return s.emit('join-error','Contraseña incorrecta');
+      }
+      s.data.passwordAttempts=0;
+    }
     if(r.mode==='private'&&!owner){
       if(r.waiting.size>=20)return s.emit('join-error','Demasiadas solicitudes');
       r.waiting.set(s.id,{name:clean(name)});s.data.room=r.id;s.data.role='waiting';s.join(r.id);
@@ -104,7 +139,29 @@ io.on('connection',s=>{
     if(!approved){r.waiting.delete(socketId);target.emit('join-error','Solicitud rechazada');target.disconnect(true);publish(r);return;}
     target.data.role=null;await admit(r,target,p.name);publish(r);
   });
-  s.on('set-mode',v=>{if(s.data.role!=='host')return;const r=rooms.get(s.data.room);if(r){r.mode=mode(v);publish(r)}});
+  s.on('set-mode',v=>{
+    if(s.data.role!=='host')return;
+    const r=rooms.get(s.data.room);
+    if(!r)return;
+    const next=mode(v);
+    if(next==='password'&&!r.passwordHash)return s.emit('room-settings-error','Primero configurá una contraseña');
+    r.mode=next;publish(r);
+  });
+  s.on('set-listed',listed=>{
+    if(s.data.role!=='host'||typeof listed!=='boolean')return;
+    const r=rooms.get(s.data.room);
+    if(r){r.listed=listed;publish(r)}
+  });
+  s.on('set-password',pass=>{
+    if(s.data.role!=='host')return;
+    const r=rooms.get(s.data.room);
+    if(!r)return;
+    if(typeof pass!=='string'||pass.length<6||pass.length>64)
+      return s.emit('room-settings-error','Contraseña de 6 a 64 caracteres');
+    const salt=randomBytes(16);
+    r.passwordHash=hashPassword(pass,salt);r.passwordSalt=salt;
+    r.mode='password';publish(r);
+  });
   s.on('set-lock',v=>{if(s.data.role!=='host')return;const r=rooms.get(s.data.room);if(r){r.locked=Boolean(v);publish(r)}});
   s.on('kick-user',async sid=>{
     if(s.data.role!=='host'||sid===s.id)return;
