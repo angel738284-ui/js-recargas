@@ -51,6 +51,53 @@ app.get('/.well-known/assetlinks.json',(_req,res)=>{
 });
 app.use(express.static(path.join(root,'public'),{maxAge:'10m',setHeaders:(res,p)=>{if(p.endsWith('index.html'))res.setHeader('Cache-Control','no-cache')}}));
 app.get('/vendor/livekit.min.js',(_q,res)=>res.sendFile(path.join(root,'node_modules/livekit-client/dist/livekit-client.umd.js'),{maxAge:'7d'}));
+// Latest published JS VOICE APK. We deliberately include GitHub prereleases:
+// our beta builds are distributed through Releases, not the Google Play store.
+let cachedUpdate={expires:0,data:null};
+const packageVersion=v=>{
+ const x=/^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+ return x?x.slice(1).map(Number):null;
+};
+const compareVersions=(a,b)=>{
+ for(let i=0;i<3;i++)if(a[i]!==b[i])return b[i]-a[i];
+ return 0;
+};
+app.get('/api/app/version',async(_req,res)=>{
+ res.set('Cache-Control','no-store');
+ if(cachedUpdate.data&&Date.now()<cachedUpdate.expires)
+   return res.json(cachedUpdate.data);
+ try{
+  const response=await fetch('https://api.github.com/repos/angel738284-ui/js-voice-apk/releases?per_page=20',{
+   headers:{'Accept':'application/vnd.github+json','User-Agent':'JS-VOICE-version-check'},
+   signal:AbortSignal.timeout(9000)
+  });
+  if(!response.ok)throw new Error('GitHub releases HTTP '+response.status);
+  const releases=await response.json();
+  const valid=releases.filter(x=>!x.draft).map(release=>{
+   const version=String(release.tag_name||'').replace(/^v/i,'');
+   const parsed=packageVersion(version);
+   if(!parsed)return null;
+   const filename='JS-VOICE-v'+version+'-Universal.apk';
+   const asset=release.assets?.find(a=>a.name===filename && a.state==='uploaded'
+      && typeof a.browser_download_url==='string'
+      && a.browser_download_url.startsWith('https://github.com/angel738284-ui/js-voice-apk/releases/download/'));
+   if(!asset)return null;
+   return {version,parsed,downloadUrl:asset.browser_download_url,
+    title:String(release.name||'Nueva versión JS VOICE').slice(0,110),
+    notes:String(release.body||'').slice(0,700),
+    publishedAt:release.published_at||null};
+  }).filter(Boolean).sort((a,b)=>compareVersions(a.parsed,b.parsed));
+  if(!valid.length)return res.status(503).json({error:'Todavía no hay versiones disponibles'});
+  const {parsed,...result}=valid[0];
+  cachedUpdate={expires:Date.now()+5*60_000,data:result};
+  res.json(result);
+ }catch(e){
+  if(cachedUpdate.data)return res.json(cachedUpdate.data);
+  console.warn('App version lookup:',e.message);
+  res.status(503).json({error:'No se pudo consultar la versión'});
+ }
+});
+
 app.get('/health',(_q,res)=>res.json({ok:true,voiceConfigured:ready,activeRooms:rooms.size}));
 app.get('/s/:id',(_q,res)=>res.sendFile(path.join(root,'public/index.html')));
 app.get('/api/rooms',(req,res)=>{
