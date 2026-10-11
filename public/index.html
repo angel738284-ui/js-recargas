@@ -3,6 +3,9 @@
 <body><main class="shell">
 <header class="top"><div class="brand"><span class="logo">🎧</span>JS <b>VOICE</b></div><span class="pill">Solo audio</span></header>
 <section id="home" class="view hidden">
+  <div class="panel"><h2>🎮 Mi perfil</h2><p class="help">Tu nombre y avatar aparecerán cuando hables.</p>
+  <label for="profileName">Apodo</label><input id="profileName" maxlength="24" placeholder="Tu nombre">
+  <label for="profileAvatar">Avatar</label><select id="profileAvatar"><option>🎮</option><option>🥷</option><option>🔥</option><option>💎</option><option>🐉</option><option>🐺</option><option>🎧</option><option>🌸</option><option>👑</option><option>🦊</option><option>⚡</option><option>🐼</option><option>🦅</option><option>💜</option></select></div>
   <div class="hero"><div class="eyebrow">HABLÁ CON LOS TUYOS</div><h1>Una llamada.<br><em>Todos tus amigos.</em></h1><p>Creá una sala y compartí el enlace. Hasta 12 personas, sin cuentas.</p></div>
   <div class="panel"><h2>Crear una sala</h2><label for="roomName">Nombre de la sala</label><input id="roomName" maxlength="24" value="Sala de amigos">
   <label>Acceso a la sala</label>
@@ -27,7 +30,7 @@
   <a href="/" class="back">← Crear otra sala</a>
 </div></section>
 <section id="call" class="view hidden">
- <div class="eyebrow connected">● EN LLAMADA</div><h1 id="callTitle">Sala de amigos</h1><p id="callMeta" class="muted">0/12 conectados</p>
+ <div class="eyebrow connected">● EN LLAMADA</div><div id="speakingBubbles" class="panel" style="padding:12px;margin-bottom:14px">🎧 Nadie está hablando</div><h1 id="callTitle">Sala de amigos</h1><p id="callMeta" class="muted">0/12 conectados</p>
  <div class="panel"><div class="eyebrow">CÓDIGO DE SALA</div><h2 id="codeDisplay" style="letter-spacing:.12em;margin:.4em 0;font-size:1.7rem">—</h2>
  <button class="secondary" id="copyCodeBtn">📋 Copiar código</button><p class="help">Tus amigos pueden pegarlo al entrar en JS VOICE.</p></div>
  <div class="panel"><div class="panel-top"><h2>Participantes</h2><small>🎤 En vivo</small></div><div id="participants" class="participants"></div></div>
@@ -49,4 +52,4 @@
  <p class="help">Para evitar el eco, usá auriculares. En Android, el audio con la pantalla apagada depende del navegador.</p>
 </section>
 <div id="toast" class="toast hidden" role="status"></div><div id="remoteAudio" aria-hidden="true"></div>
-</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261010-6"></script></body></html>
+</main><script src="/socket.io/socket.io.js"></script><script src="/vendor/livekit.min.js"></script><script src="/app.js?v=20261011-7"></script></body></html>

@@ -8,6 +8,13 @@ const show=name=>['home','lobby','call'].forEach(x=>$(x).classList.toggle('hidde
 const toast=message=>{const t=$('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),4200)};
 const invite=()=>location.origin+'/s/'+roomId;
 const prettyCode=code=>code.length===8?code.slice(0,4)+' '+code.slice(4):code;
+const avatar=()=>localStorage.getItem('jsvoice-avatar')||'🎮';
+function showSpeakers(){
+ const box=$('speakingBubbles');
+ if(!box)return;
+ const talking=members.filter(m=>speakers.has(m.identity)).slice(0,2);
+ box.textContent=talking.length?'🟢 Hablando: '+talking.map(m=>(m.avatar||'🎮')+' '+m.name).join('  •  '):'🎧 Nadie está hablando';
+}
 function setCallAudioSession(active){
   try {
     if('audioSession' in navigator) navigator.audioSession.type=active?'play-and-record':'auto';
@@ -46,7 +53,7 @@ function people(){
  if(!members.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Todavía no hay nadie conectado.';box.append(empty);return}
  for(const p of members){
    const el=document.createElement('div');el.className='participant'+(speakers.has(p.identity)?' talking':'');
-   const avatar=document.createElement('span');avatar.className='avatar';avatar.textContent=p.name.substring(0,1).toUpperCase();
+   const avatar=document.createElement('span');avatar.className='avatar';avatar.textContent=p.avatar||p.name.substring(0,1).toUpperCase();
    const details=document.createElement('div');details.className='participant-info';
    const title=document.createElement('div');title.className='participant-name';title.textContent=p.name+(p.identity===myId?' (vos)':'');
    const meta=document.createElement('div');meta.className='participant-meta';meta.textContent=(p.host?'👑 Admin':'Invitado')+(p.moderatorMuted?' · 🔇 Silenciado para todos':speakers.has(p.identity)?' · Hablando':'');
@@ -72,6 +79,7 @@ function people(){
    }
    box.append(el);
  }
+ showSpeakers();
 }
 function waitlist(list){
  const box=$('waitingBox'),target=$('waitingList');box.classList.toggle('hidden',!list.length);target.replaceChildren();
@@ -143,7 +151,7 @@ function requestJoin(){
  socket.on('connect',()=>{
    step='sala';cancelTimer();$('lobbyMessage').textContent='Verificando tu entrada…';
    timer=setTimeout(()=>fail('La sala no respondió. Tocá Entrar para reintentar.'),16000);
-   socket.emit('join-room',{roomId,name,hostKey:localStorage.getItem(hostStorageKey)||'',password:$('joinPassword').value});
+   socket.emit('join-room',{roomId,name,avatar:avatar(),hostKey:localStorage.getItem(hostStorageKey)||'',password:$('joinPassword').value});
  });
  socket.on('join-pending',()=>{done=true;cancelTimer();$('lobbyMessage').textContent='⏳ Esperando aprobación del administrador…'});
  socket.on('join-error',msg=>{done=false;fail(String(msg||'No se pudo entrar'))});
@@ -176,6 +184,12 @@ document.addEventListener('visibilitychange',async()=>{
  }catch{}
 });
 $('createBtn').onclick=create;$('joinBtn').onclick=requestJoin;
+if($('profileName')){
+ $('profileName').value=localStorage.getItem('jsvoice-name')||'';
+ $('profileName').onchange=()=>localStorage.setItem('jsvoice-name',$('profileName').value.trim().slice(0,24));
+ $('profileAvatar').value=avatar();
+ $('profileAvatar').onchange=()=>localStorage.setItem('jsvoice-avatar',$('profileAvatar').value);
+}
 if($('joinCodeBtn')){
  const enterCode=()=>{
    const raw=$('joinCode').value.trim();

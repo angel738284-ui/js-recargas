@@ -16,6 +16,8 @@ const url = process.env.LIVEKIT_URL || '';
 const ready = Boolean(url && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
 const voice = ready ? new RoomServiceClient(url.replace(/^wss:/,'https:').replace(/^ws:/,'http:'),process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET) : null;
 const clean = s => String(s||'').trim().slice(0,24).replace(/[<>]/g,'') || 'Invitado';
+const AVATARS=new Set(['🎮','🥷','🔥','💎','🐉','🐺','🎧','🌸','👑','🦊','⚡','🐼','🦅','💜']);
+const avatarFor=v=>AVATARS.has(v)?v:'🎮';
 const CODE_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const rid=()=>{
   let id;
@@ -75,7 +77,7 @@ app.post('/api/rooms',(req,res)=>{
 });
 function publish(r){
   r.last=Date.now();
-  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted)}))});
+  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted),avatar:u.avatar||'🎮'}))});
   for(const [sid,u] of r.users) if(u.host)
     io.to(sid).emit('waiting-state',[...r.waiting.entries()].map(([socketId,p])=>({socketId,name:p.name})));
 }
@@ -85,7 +87,7 @@ async function prepare(r){
     .then(()=>{r.prepared=true}).finally(()=>{r.preparing=null});
   await r.preparing;
 }
-async function admit(r,s,name,host=false){
+async function admit(r,s,name,host=false,avatar='🎮'){
   if(r.locked&&!host)return s.emit('join-error','La sala está bloqueada');
   if(r.users.size>=LIMIT)return s.emit('join-error','La sala está llena');
   if(!ready)return s.emit('join-error','Falta configurar el servidor de voz LiveKit');
@@ -99,14 +101,14 @@ async function admit(r,s,name,host=false){
     tok.addGrant({roomJoin:true,room:'jsvoice-'+r.id,canPublish:true,canSubscribe:true,canPublishData:false});
     const jwt=await tok.toJwt();
     r.waiting.delete(s.id);
-    r.users.set(s.id,{identity,name,host,moderatorMuted:false});
+    r.users.set(s.id,{identity,name,host,moderatorMuted:false,avatar:avatarFor(avatar)});
     s.data.room=r.id;s.data.role=host?'host':'guest';s.join(r.id);
     s.emit('join-approved',{token:jwt,livekitUrl:url,identity,name,host});
     publish(r);
   }catch(e){console.error('LiveKit:',e?.message);s.emit('join-error','No se pudo conectar al servidor de voz');}
 }
 io.on('connection',s=>{
-  s.on('join-room',async({roomId,name,hostKey,password}={})=>{
+  s.on('join-room',async({roomId,name,hostKey,password,avatar}={})=>{
     if(s.data.room)return s.emit('join-error','Ya estás en una sala');
     const r=rooms.get(String(roomId||''));
     if(!r)return s.emit('join-error','La sala ya no existe');
@@ -127,17 +129,17 @@ io.on('connection',s=>{
     }
     if(r.mode==='private'&&!owner){
       if(r.waiting.size>=20)return s.emit('join-error','Demasiadas solicitudes');
-      r.waiting.set(s.id,{name:clean(name)});s.data.room=r.id;s.data.role='waiting';s.join(r.id);
+      r.waiting.set(s.id,{name:clean(name),avatar:avatarFor(avatar)});s.data.room=r.id;s.data.role='waiting';s.join(r.id);
       s.emit('join-pending');publish(r);return;
     }
-    await admit(r,s,clean(name),owner);
+    await admit(r,s,clean(name),owner,avatarFor(avatar));
   });
   s.on('waiting-decision',async({socketId,approved}={})=>{
     if(s.data.role!=='host')return;
     const r=rooms.get(s.data.room),p=r?.waiting.get(socketId),target=io.sockets.sockets.get(socketId);
     if(!p||!target)return;
     if(!approved){r.waiting.delete(socketId);target.emit('join-error','Solicitud rechazada');target.disconnect(true);publish(r);return;}
-    target.data.role=null;await admit(r,target,p.name);publish(r);
+    target.data.role=null;await admit(r,target,p.name,false,p.avatar);publish(r);
   });
   s.on('set-mode',v=>{
     if(s.data.role!=='host')return;
