@@ -35,7 +35,7 @@ const verifyPassword = (room,candidate) => {
   return timingSafeEqual(hashPassword(candidate,room.passwordSalt),room.passwordHash);
 };
 const info = r => ({id:r.id,name:r.name,mode:r.mode,locked:r.locked,
-  listed:r.listed, passwordProtected:r.mode==='password',count:r.users.size,capacity:LIMIT});
+  listed:r.listed, passwordProtected:r.mode==='password',count:r.users.size,audioCount:[...r.users.values()].filter(u=>u.inAudio).length,capacity:LIMIT});
 const publicRoom = r=>({...info(r),createdAt:r.createdAt});
 
 app.disable('x-powered-by');
@@ -89,7 +89,7 @@ configureDirectRooms(({caller,recipient,calleeName})=>{
 });
 function publish(r){
   r.last=Date.now();
-  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted),avatar:u.avatar||'🎮'}))});
+  io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted),inAudio:Boolean(u.inAudio),avatar:u.avatar||'🎮'}))});
   for(const [sid,u] of r.users) if(u.host)
     io.to(sid).emit('waiting-state',[...r.waiting.entries()].map(([socketId,p])=>({socketId,name:p.name})));
 }
@@ -99,28 +99,32 @@ async function prepare(r){
     .then(()=>{r.prepared=true}).finally(()=>{r.preparing=null});
   await r.preparing;
 }
-async function admit(r,s,name,host=false,avatar='🎮'){
+async function admit(r,s,name,host=false,avatar='🎮',textOnly=false){
   if(r.locked&&!host)return s.emit('join-error','La sala está bloqueada');
   if(r.users.size>=LIMIT)return s.emit('join-error','La sala está llena');
-  if(!ready)return s.emit('join-error','Falta configurar el servidor de voz LiveKit');
+  if(!ready&&!textOnly)return s.emit('join-error','Falta configurar el servidor de voz LiveKit');
   try {
-    await prepare(r);
+    if(!textOnly)await prepare(r);
     if(rooms.get(r.id)!==r)return s.emit('join-error','La sala finalizó');
     if(!s.connected)return;
     if(r.users.size>=LIMIT)return s.emit('join-error','La sala está llena');
     const identity='u-'+randomUUID();
-    const tok=new AccessToken(process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET,{identity,name,ttl:'10m'});
-    tok.addGrant({roomJoin:true,room:'jsvoice-'+r.id,canPublish:true,canSubscribe:true,canPublishData:false});
-    const jwt=await tok.toJwt();
+    let jwt='';
+    if(!textOnly){
+      const tok=new AccessToken(process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET,{identity,name,ttl:'10m'});
+      tok.addGrant({roomJoin:true,room:'jsvoice-'+r.id,canPublish:true,canSubscribe:true,canPublishData:false});
+      jwt=await tok.toJwt();
+    }
     r.waiting.delete(s.id);
-    r.users.set(s.id,{identity,name,host,moderatorMuted:false,avatar:avatarFor(avatar)});
+    r.users.set(s.id,{identity,name,host,moderatorMuted:false,inAudio:!textOnly,avatar:avatarFor(avatar)});
     s.data.room=r.id;s.data.role=host?'host':'guest';s.join(r.id);
     s.emit('join-approved',{token:jwt,livekitUrl:url,identity,name,host});
+    s.emit('chat-history',r.chat||[]);
     publish(r);
   }catch(e){console.error('LiveKit:',e?.message);s.emit('join-error','No se pudo conectar al servidor de voz');}
 }
 io.on('connection',s=>{
-  s.on('join-room',async({roomId,name,hostKey,password,avatar,accountSession}={})=>{
+  s.on('join-room',async({roomId,name,hostKey,password,avatar,accountSession,textOnly}={})=>{
     if(s.data.room)return s.emit('join-error','Ya estás en una sala');
     const r=rooms.get(String(roomId||''));
     if(!r)return s.emit('join-error','La sala ya no existe');
@@ -146,17 +150,49 @@ io.on('connection',s=>{
     }
     if(r.mode==='private'&&!owner){
       if(r.waiting.size>=20)return s.emit('join-error','Demasiadas solicitudes');
-      r.waiting.set(s.id,{name:clean(name),avatar:avatarFor(avatar)});s.data.room=r.id;s.data.role='waiting';s.join(r.id);
+      r.waiting.set(s.id,{name:clean(name),avatar:avatarFor(avatar),textOnly:textOnly===true});s.data.room=r.id;s.data.role='waiting';s.join(r.id);
       s.emit('join-pending');publish(r);return;
     }
-    await admit(r,s,clean(name),owner,avatarFor(avatar));
+    await admit(r,s,clean(name),owner,avatarFor(avatar),textOnly===true);
+  });
+  s.on('voice-token-request',async()=>{
+    const r=rooms.get(s.data.room);
+    const u=r?.users.get(s.id);
+    if(!u||!['host','guest'].includes(s.data.role))return s.emit('voice-token-error','Primero entrá a la sala');
+    if(!ready)return s.emit('voice-token-error','Audio no disponible');
+    try{
+      await prepare(r);
+      if(!s.connected||rooms.get(r.id)!==r||r.users.get(s.id)!==u)return;
+      const token=new AccessToken(process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET,{identity:u.identity,name:u.name,ttl:'10m'});
+      token.addGrant({roomJoin:true,room:'jsvoice-'+r.id,canPublish:!u.moderatorMuted,canSubscribe:true,canPublishData:false});
+      s.emit('voice-token',{token:await token.toJwt(),livekitUrl:url});
+    }catch(e){console.error('Token de sala:',e?.message);s.emit('voice-token-error','No se pudo iniciar el audio')}
+  });
+  s.on('audio-presence',active=>{
+    const r=rooms.get(s.data.room),u=r?.users.get(s.id);
+    if(!u||!['host','guest'].includes(s.data.role)||typeof active!=='boolean')return;
+    if(u.inAudio!==active){u.inAudio=active;publish(r)}
+  });
+  s.on('chat-send',body=>{
+    const r=rooms.get(s.data.room),u=r?.users.get(s.id);
+    if(!u||!['host','guest'].includes(s.data.role)||typeof body!=='string')return;
+    const now=Date.now();
+    if(now-(s.data.lastChatAt||0)<700)return s.emit('chat-error','Esperá un momento antes de enviar otro mensaje');
+    const message=body.replace(/[\u0000-\u001F\u007F]/g,' ').trim();
+    if(!message||message.length>350)return s.emit('chat-error','El mensaje debe tener entre 1 y 350 caracteres');
+    s.data.lastChatAt=now;
+    const item={id:randomUUID(),name:u.name,avatar:u.avatar||'🎮',body:message,createdAt:now};
+    if(!r.chat)r.chat=[];
+    r.chat.push(item);
+    if(r.chat.length>80)r.chat.splice(0,r.chat.length-80);
+    for(const sid of r.users.keys())io.to(sid).emit('room-chat',item);
   });
   s.on('waiting-decision',async({socketId,approved}={})=>{
     if(s.data.role!=='host')return;
     const r=rooms.get(s.data.room),p=r?.waiting.get(socketId),target=io.sockets.sockets.get(socketId);
     if(!p||!target)return;
     if(!approved){r.waiting.delete(socketId);target.emit('join-error','Solicitud rechazada');target.disconnect(true);publish(r);return;}
-    target.data.role=null;await admit(r,target,p.name,false,p.avatar);publish(r);
+    target.data.role=null;await admit(r,target,p.name,false,p.avatar,p.textOnly);publish(r);
   });
   s.on('set-mode',v=>{
     if(s.data.role!=='host')return;
@@ -186,7 +222,7 @@ io.on('connection',s=>{
     if(s.data.role!=='host'||sid===s.id)return;
     const r=rooms.get(s.data.room),u=r?.users.get(sid),target=io.sockets.sockets.get(sid);
     if(!u||!target)return;
-    try{await voice?.removeParticipant('jsvoice-'+r.id,u.identity)}catch(e){console.error(e?.message)}
+    try{if(u.inAudio)await voice?.removeParticipant('jsvoice-'+r.id,u.identity)}catch(e){console.error(e?.message)}
     target.emit('kicked');target.disconnect(true);r.users.delete(sid);publish(r);
   });
   s.on('host-set-mute',async({socketId,muted}={})=>{
@@ -196,7 +232,7 @@ io.on('connection',s=>{
     if(!target||target.host||socketId===s.id||typeof muted!=='boolean')return;
     if(target.moderatorMuted===muted)return publish(r);
     try{
-      await voice.updateParticipant('jsvoice-'+r.id,target.identity,{
+      if(target.inAudio)await voice.updateParticipant('jsvoice-'+r.id,target.identity,{
         permission:{canPublish:!muted,canSubscribe:true,canPublishData:false}
       });
       if(rooms.get(r.id)!==r||r.users.get(socketId)!==target)return;
