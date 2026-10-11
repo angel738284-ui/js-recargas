@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS jsvoice.accounts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS banner BYTEA;
 CREATE TABLE IF NOT EXISTS jsvoice.sessions (
   session_hash VARCHAR(64) PRIMARY KEY,
   account_id UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
@@ -50,7 +51,7 @@ const AVATARS = new Set(['🎮','🥷','🔥','💎','🐉','🐺','🎧','🌸'
 const code=()=>randomBytes(6).toString('hex').slice(0,10).toUpperCase();
 const hash=t=>createHash('sha256').update(t).digest('hex');
 const portrait=a=>a.photo?'/api/account/accounts/'+a.id+'/photo':a.google_photo;
-const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),bio:a.bio,friendCode:a.friend_code});
+const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),banner:(a.banner||a.has_banner)?'/api/account/accounts/'+a.id+'/banner':null,bio:a.bio,friendCode:a.friend_code});
 const selfAccount=a=>({...publicAccount(a),email:a.email,preferences:a.settings||{}});
 const fail=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Error del servidor'});
 const run=fn=>async(req,res)=>{try{await fn(req,res)}catch(e){console.error('Cuentas JS VOICE:',e.message);fail(res,e)}};
@@ -122,6 +123,30 @@ router.post('/me/photo',auth,async(req,res)=>{
   res.json({profile:selfAccount(q.rows[0])});
  }catch(e){fail(res,e)}
 });
+router.post('/me/banner',auth,async(req,res)=>{
+ try{
+  let chunks=[],length=0;
+  for await(const part of req){
+   length+=part.length;
+   if(length>225280)return res.status(413).json({error:'La portada debe pesar menos de 220 KB'});
+   chunks.push(part);
+  }
+  const data=Buffer.concat(chunks);
+  if(req.get('content-type')!=='image/jpeg'||data.length<100||
+     data[0]!==0xff||data[1]!==0xd8||data[data.length-2]!==0xff||data[data.length-1]!==0xd9)
+     return res.status(400).json({error:'Elegí una imagen válida para la portada'});
+  const saved=await pool.query('UPDATE jsvoice.accounts SET banner=$2,updated_at=now() WHERE id=$1 RETURNING *',[req.account.id,data]);
+  res.json({profile:selfAccount(saved.rows[0])});
+ }catch(e){fail(res,e)}
+});
+router.get('/accounts/:id/banner',run(async(req,res)=>{
+ await ensureDatabase();
+ if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.sendStatus(404);
+ const result=await pool.query('SELECT banner FROM jsvoice.accounts WHERE id=$1',[req.params.id]);
+ if(!result.rowCount||!result.rows[0].banner)return res.sendStatus(404);
+ res.set('Cache-Control','no-cache');
+ res.type('jpeg').send(result.rows[0].banner);
+}));
 router.get('/accounts/:id/photo',run(async(req,res)=>{
  await ensureDatabase();
  if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.sendStatus(404);
@@ -131,13 +156,24 @@ router.get('/accounts/:id/photo',run(async(req,res)=>{
  res.type('jpeg').send(result.rows[0].photo);
 }));
 router.get('/friends',auth,run(async(req,res)=>{
- const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.friend_code,a.bio,a.settings
+ const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings
  FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=
  CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
  WHERE f.sender=$1 OR f.recipient=$1 ORDER BY f.created_at DESC LIMIT 150`,[req.account.id]);
  res.json({friends:q.rows.filter(x=>x.status==='accepted').map(x=>publicAccount({...x,photo:x.has_photo?true:null})),
  requests:q.rows.filter(x=>x.status==='pending'&&x.recipient===req.account.id)
  .map(x=>publicAccount({...x,photo:x.has_photo?true:null}))});
+}));
+router.get('/friends/:id/profile',auth,run(async(req,res)=>{
+ if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Perfil inválido'});
+ const q=await pool.query(`SELECT a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,
+   a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings
+   FROM jsvoice.accounts a WHERE a.id=$1 AND EXISTS(
+   SELECT 1 FROM jsvoice.friendships f WHERE f.status='accepted' AND
+   ((f.sender=$2 AND f.recipient=a.id) OR (f.recipient=$2 AND f.sender=a.id)))`,
+   [req.params.id,req.account.id]);
+ if(!q.rowCount)return res.status(404).json({error:'Este perfil no está en tu lista de amigos'});
+ res.json({profile:publicAccount({...q.rows[0],photo:q.rows[0].has_photo?true:null})});
 }));
 router.post('/friends/request',auth,run(async(req,res)=>{
  const friendCode=String(req.body?.friendCode||'').trim().toUpperCase();
