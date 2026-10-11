@@ -2,6 +2,7 @@ import {Router} from 'express';
 import {randomBytes,createHash,randomUUID} from 'node:crypto';
 import {OAuth2Client} from 'google-auth-library';
 import pg from 'pg';
+import {registerPushDevice,unregisterPushDevice,pushReady,sendPushToAccount} from './push.js';
 
 const clients = new OAuth2Client();
 const clientId = process.env.GOOGLE_WEB_CLIENT_ID || '';
@@ -103,6 +104,18 @@ router.post('/google',run(async(req,res)=>{
   res.json({session,profile:selfAccount(person)});
 }));
 router.get('/me',auth,run(async(req,res)=>res.json({profile:selfAccount(req.account)})));
+router.get('/push/status',auth,run(async(req,res)=>{
+ res.set('Cache-Control','no-store');
+ res.json({serverConfigured:pushReady()});
+}));
+router.post('/push/register',auth,run(async(req,res)=>{
+ await registerPushDevice(req.account.id,req.body?.token);
+ res.json({ok:true,serverConfigured:pushReady()});
+}));
+router.post('/push/unregister',auth,run(async(req,res)=>{
+ await unregisterPushDevice(req.account.id,req.body?.token);
+ res.json({ok:true});
+}));
 router.patch('/me',auth,run(async(req,res)=>{
  const name=safeName(req.body?.name);
  const bio=typeof req.body?.bio==='string'?req.body.bio.trim().slice(0,160):req.account.bio;
@@ -220,6 +233,7 @@ router.post('/friends/request',auth,run(async(req,res)=>{
       await client.query('UPDATE jsvoice.friendships SET intro_message=$3 WHERE sender=$1 AND recipient=$2',
         [req.account.id,other,intro]);
       await client.query('COMMIT');
+      await sendPushToAccount(other,{type:'friend',title:'Nueva solicitud de amistad',body:req.account.display_name+' te envió un mensaje de presentación',otherId:req.account.id});
       return res.json({ok:true,introSent:true});
     }
     await client.query('ROLLBACK');
@@ -232,6 +246,8 @@ router.post('/friends/request',auth,run(async(req,res)=>{
   await client.query('INSERT INTO jsvoice.friendships(sender,recipient,intro_message) VALUES($1,$2,$3)',
    [req.account.id,other,intro||null]);
   await client.query('COMMIT');
+  await sendPushToAccount(other,{type:'friend',title:'Nueva solicitud de amistad',
+    body:intro?req.account.display_name+' te envió una solicitud y un mensaje':req.account.display_name+' quiere agregarte',otherId:req.account.id});
   res.status(201).json({ok:true,introSent:Boolean(intro)});
  }catch(e){try{await client.query('ROLLBACK')}catch{}throw e}
  finally{client.release()}
@@ -240,6 +256,8 @@ router.post('/friends/:id/accept',auth,run(async(req,res)=>{
  const q=await pool.query(`UPDATE jsvoice.friendships SET status='accepted'
  WHERE sender=$1 AND recipient=$2 AND status='pending' RETURNING sender`,[req.params.id,req.account.id]);
  if(!q.rowCount)return res.sendStatus(404);
+ await sendPushToAccount(req.params.id,{type:'friend',title:'Solicitud aceptada',
+   body:req.account.display_name+' aceptó tu solicitud de amistad',otherId:req.account.id});
  res.json({ok:true});
 }));
 router.post('/friends/:id/reject',auth,run(async(req,res)=>{
@@ -286,6 +304,8 @@ router.post('/messages/:id',auth,run(async(req,res)=>{
  if(recent.rows[0].n>=25)return res.status(429).json({error:'Demasiados mensajes. Esperá un momento'});
  const q=await pool.query('INSERT INTO jsvoice.direct_messages(id,sender,recipient,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',
  [randomUUID(),req.account.id,req.params.id,body]);
+ await sendPushToAccount(req.params.id,{type:'message',title:'Mensaje de '+req.account.display_name,
+   body:body.slice(0,140),otherId:req.account.id});
  res.status(201).json({ok:true,id:q.rows[0].id,createdAt:q.rows[0].created_at});
 }));
 router.delete('/friends/:id',auth,run(async(req,res)=>{

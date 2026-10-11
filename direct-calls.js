@@ -1,5 +1,6 @@
 import {Router} from 'express';
 import pg from 'pg';
+import {sendPushToAccount} from './push.js';
 import {randomUUID,createHash} from 'node:crypto';
 
 /* Dedicated, session-authenticated invitations. Recipient must accept first.
@@ -73,6 +74,10 @@ router.post('/calls',auth,wrap(async(req,res)=>{
  try{await pool.query('INSERT INTO jsvoice.direct_calls(id,caller,recipient,room_id) VALUES($1,$2,$3,$4)',
   [id,req.accountId,other.id,room.id]);}
  catch(e){console.error('Direct call save failed:',e.message);throw e}
+ const caller=await pool.query('SELECT display_name FROM jsvoice.accounts WHERE id=$1',[req.accountId]);
+ await sendPushToAccount(other.id,{type:'call',title:'Llamada entrante',
+   body:(caller.rows[0]?.display_name||'Un amigo')+' te está llamando por JS VOICE',
+   callId:id,otherId:req.accountId});
  res.status(201).json({callId:id,roomId:room.id,hostKey:room.hostKey,status:'ringing',expiresInSeconds:120});
 }));
 router.post('/calls/:id/respond',auth,wrap(async(req,res)=>{
