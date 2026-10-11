@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS jsvoice.friendships (
   CHECK(sender<>recipient)
 );
 CREATE INDEX IF NOT EXISTS jsvoice_friendships_recipient ON jsvoice.friendships(recipient);
+ALTER TABLE jsvoice.friendships ADD COLUMN IF NOT EXISTS intro_message VARCHAR(300);
+CREATE TABLE IF NOT EXISTS jsvoice.direct_messages(
+ id UUID PRIMARY KEY, sender UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+ recipient UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+ body VARCHAR(1000) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ read_at TIMESTAMPTZ, CHECK(sender<>recipient)
+);
+CREATE INDEX IF NOT EXISTS jsvoice_dm_sent ON jsvoice.direct_messages(sender,recipient,created_at DESC);
+CREATE INDEX IF NOT EXISTS jsvoice_dm_received ON jsvoice.direct_messages(recipient,created_at DESC);
 `;
 let initialized=false;
 async function ensureDatabase(){
@@ -155,14 +164,27 @@ router.get('/accounts/:id/photo',run(async(req,res)=>{
  res.set('Cache-Control','public,max-age=120');
  res.type('jpeg').send(result.rows[0].photo);
 }));
+router.get('/friends/lookup/:code',auth,run(async(req,res)=>{
+ const code=String(req.params.code||'').trim().toUpperCase();
+ if(!/^[A-F0-9]{10}$/.test(code))return res.status(400).json({error:'El código debe tener 10 caracteres'});
+ const q=await pool.query('SELECT id,display_name,friend_code,settings FROM jsvoice.accounts WHERE friend_code=$1',[code]);
+ if(!q.rowCount||q.rows[0].id===req.account.id)return res.status(404).json({error:'No encontramos ese usuario'});
+ const id=q.rows[0].id;
+ const fs=await pool.query('SELECT sender,recipient,status FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)',[req.account.id,id]);
+ const f=fs.rows[0];
+ const relation=!f?'none':f.status==='accepted'?'friends':f.status==='rejected'?'rejected':f.sender===req.account.id?'sent':'received';
+ res.json({user:{id,name:q.rows[0].display_name,avatar:q.rows[0].settings?.avatar||'🎮',friendCode:code},relation});
+}));
 router.get('/friends',auth,run(async(req,res)=>{
- const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings
+ const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings,f.intro_message
  FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=
  CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
  WHERE f.sender=$1 OR f.recipient=$1 ORDER BY f.created_at DESC LIMIT 150`,[req.account.id]);
  res.json({friends:q.rows.filter(x=>x.status==='accepted').map(x=>publicAccount({...x,photo:x.has_photo?true:null})),
  requests:q.rows.filter(x=>x.status==='pending'&&x.recipient===req.account.id)
- .map(x=>publicAccount({...x,photo:x.has_photo?true:null}))});
+ .map(x=>({...publicAccount({...x,photo:x.has_photo?true:null}),introMessage:x.intro_message||''})),
+ sent:q.rows.filter(x=>x.status==='pending'&&x.sender===req.account.id)
+ .map(x=>({...publicAccount({...x,photo:x.has_photo?true:null}),introMessage:x.intro_message||''}))});
 }));
 router.get('/friends/:id/profile',auth,run(async(req,res)=>{
  if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Perfil inválido'});
@@ -177,24 +199,94 @@ router.get('/friends/:id/profile',auth,run(async(req,res)=>{
 }));
 router.post('/friends/request',auth,run(async(req,res)=>{
  const friendCode=String(req.body?.friendCode||'').trim().toUpperCase();
- if(!/^[0-9A-F]{10}$/.test(friendCode))return res.status(400).json({error:'Código de amigo inválido'});
+ const raw=req.body?.message, intro=typeof raw==='string'?raw.trim():'';
+ if(!/^[A-F0-9]{10}$/.test(friendCode))return res.status(400).json({error:'Código de amigo inválido'});
+ if(raw!==undefined && (typeof raw!=='string'||intro.length>300))
+   return res.status(400).json({error:'Tu presentación debe tener máximo 300 caracteres'});
  const q=await pool.query('SELECT id FROM jsvoice.accounts WHERE friend_code=$1',[friendCode]);
  if(!q.rowCount||q.rows[0].id===req.account.id)return res.status(404).json({error:'No encontramos ese usuario'});
  const other=q.rows[0].id;
- const count=await pool.query(`SELECT count(*)::int AS n FROM jsvoice.friendships
- WHERE sender=$1 AND created_at>now()-interval '1 day'`,[req.account.id]);
- if(count.rows[0].n>=20)return res.status(429).json({error:'Máximo de 20 solicitudes por día'});
- const existing=await pool.query(`SELECT status FROM jsvoice.friendships
- WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)`,[req.account.id,other]);
- if(existing.rowCount)return res.status(409).json({error:'Ya existe una solicitud o amistad'});
- await pool.query('INSERT INTO jsvoice.friendships(sender,recipient) VALUES($1,$2)',[req.account.id,other]);
- res.status(201).json({ok:true});
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const pair=[req.account.id,other].sort().join(':');
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[pair]);
+  const existing=await client.query(`SELECT sender,recipient,status,intro_message
+    FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)
+    FOR UPDATE`,[req.account.id,other]);
+  if(existing.rowCount){
+    const f=existing.rows[0];
+    if(f.status==='pending'&&f.sender===req.account.id&&intro&&!f.intro_message){
+      await client.query('UPDATE jsvoice.friendships SET intro_message=$3 WHERE sender=$1 AND recipient=$2',
+        [req.account.id,other,intro]);
+      await client.query('COMMIT');
+      return res.json({ok:true,introSent:true});
+    }
+    await client.query('ROLLBACK');
+    return res.status(409).json({error:f.status==='rejected'?'Esta persona rechazó tu solicitud. No podés enviar otra.':
+      f.status==='accepted'?'Ya son amigos':'Ya existe una solicitud. Solo se permite un mensaje de presentación.'});
+  }
+  const count=await client.query(`SELECT count(*)::int AS n FROM jsvoice.friendships
+    WHERE sender=$1 AND created_at>now()-interval '1 day'`,[req.account.id]);
+  if(count.rows[0].n>=20){await client.query('ROLLBACK');return res.status(429).json({error:'Máximo de 20 solicitudes por día'})}
+  await client.query('INSERT INTO jsvoice.friendships(sender,recipient,intro_message) VALUES($1,$2,$3)',
+   [req.account.id,other,intro||null]);
+  await client.query('COMMIT');
+  res.status(201).json({ok:true,introSent:Boolean(intro)});
+ }catch(e){try{await client.query('ROLLBACK')}catch{}throw e}
+ finally{client.release()}
 }));
 router.post('/friends/:id/accept',auth,run(async(req,res)=>{
  const q=await pool.query(`UPDATE jsvoice.friendships SET status='accepted'
  WHERE sender=$1 AND recipient=$2 AND status='pending' RETURNING sender`,[req.params.id,req.account.id]);
  if(!q.rowCount)return res.sendStatus(404);
  res.json({ok:true});
+}));
+router.post('/friends/:id/reject',auth,run(async(req,res)=>{
+ const q=await pool.query("UPDATE jsvoice.friendships SET status='rejected' WHERE sender=$1 AND recipient=$2 AND status='pending' RETURNING sender",
+ [req.params.id,req.account.id]);
+ if(!q.rowCount)return res.status(404).json({error:'Solicitud no encontrada'});
+ res.json({ok:true});
+}));
+router.get('/messages/conversations',auth,run(async(req,res)=>{
+ const q=await pool.query(`SELECT a.id,a.display_name,a.friend_code,a.settings,
+  (SELECT m.body FROM jsvoice.direct_messages m WHERE (m.sender=a.id AND m.recipient=$1)
+    OR (m.sender=$1 AND m.recipient=a.id) ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+  (SELECT count(*)::int FROM jsvoice.direct_messages m WHERE m.sender=a.id AND m.recipient=$1 AND m.read_at IS NULL) AS unread
+  FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
+  WHERE f.status='accepted' AND (f.sender=$1 OR f.recipient=$1)
+  ORDER BY a.display_name LIMIT 150`,[req.account.id]);
+ res.json({conversations:q.rows.map(x=>({id:x.id,name:x.display_name,friendCode:x.friend_code,
+ avatar:x.settings?.avatar||'🎮',lastMessage:x.last_message||'',unread:x.unread}))});
+}));
+router.get('/messages/:id',auth,run(async(req,res)=>{
+ if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Usuario inválido'});
+ const allowed=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted'
+   AND ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,
+ [req.account.id,req.params.id]);
+ if(!allowed.rowCount)return res.status(403).json({error:'Solo podés chatear con tus amigos'});
+ const q=await pool.query(`SELECT * FROM (SELECT id,sender,recipient,body,created_at
+   FROM jsvoice.direct_messages WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)
+   ORDER BY created_at DESC LIMIT 100) v ORDER BY created_at ASC`,
+ [req.account.id,req.params.id]);
+ await pool.query('UPDATE jsvoice.direct_messages SET read_at=now() WHERE recipient=$1 AND sender=$2 AND read_at IS NULL',
+ [req.account.id,req.params.id]);
+ res.json({messages:q.rows.map(x=>({id:x.id,mine:x.sender===req.account.id,body:x.body,createdAt:x.created_at}))});
+}));
+router.post('/messages/:id',auth,run(async(req,res)=>{
+ if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Usuario inválido'});
+ const body=typeof req.body?.body==='string'?req.body.body.trim():'';
+ if(!body||body.length>1000)return res.status(400).json({error:'El mensaje debe tener entre 1 y 1000 caracteres'});
+ const allowed=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted'
+   AND ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,
+ [req.account.id,req.params.id]);
+ if(!allowed.rowCount)return res.status(403).json({error:'Solo podés enviar mensajes a tus amigos'});
+ const recent=await pool.query(`SELECT count(*)::int n FROM jsvoice.direct_messages WHERE sender=$1
+  AND created_at>now()-interval '1 minute'`,[req.account.id]);
+ if(recent.rows[0].n>=25)return res.status(429).json({error:'Demasiados mensajes. Esperá un momento'});
+ const q=await pool.query('INSERT INTO jsvoice.direct_messages(id,sender,recipient,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',
+ [randomUUID(),req.account.id,req.params.id,body]);
+ res.status(201).json({ok:true,id:q.rows[0].id,createdAt:q.rows[0].created_at});
 }));
 router.delete('/friends/:id',auth,run(async(req,res)=>{
  await pool.query('DELETE FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)',[req.account.id,req.params.id]);
