@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS jsvoice.accounts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS banner BYTEA;
+CREATE TABLE IF NOT EXISTS jsvoice.presence (
+  account_id UUID PRIMARY KEY REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS jsvoice.sessions (
   session_hash VARCHAR(64) PRIMARY KEY,
   account_id UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
@@ -107,6 +111,23 @@ router.get('/me',auth,run(async(req,res)=>res.json({profile:selfAccount(req.acco
 router.get('/push/status',auth,run(async(req,res)=>{
  res.set('Cache-Control','no-store');
  res.json({serverConfigured:pushReady()});
+}));
+// Online presence is visible only to accepted friends. No device identifiers are shared.
+router.post('/presence/heartbeat',auth,run(async(req,res)=>{
+ await pool.query(`INSERT INTO jsvoice.presence(account_id,last_seen) VALUES($1,now())
+  ON CONFLICT(account_id) DO UPDATE SET last_seen=excluded.last_seen`,[req.account.id]);
+ res.set('Cache-Control','no-store');
+ res.json({ok:true});
+}));
+router.get('/presence/friends',auth,run(async(req,res)=>{
+ const q=await pool.query(`SELECT a.id, COALESCE(p.last_seen > now()-interval '75 seconds',false) AS online
+  FROM jsvoice.friendships f
+  JOIN jsvoice.accounts a ON a.id=CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
+  LEFT JOIN jsvoice.presence p ON p.account_id=a.id
+  WHERE f.status='accepted' AND (f.sender=$1 OR f.recipient=$1)
+  LIMIT 150`,[req.account.id]);
+ res.set('Cache-Control','no-store');
+ res.json({friends:q.rows});
 }));
 router.post('/push/register',auth,run(async(req,res)=>{
  await registerPushDevice(req.account.id,req.body?.token);
