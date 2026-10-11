@@ -98,6 +98,14 @@ router.post('/calls/:id/cancel',auth,wrap(async(req,res)=>{
  if(!q.rowCount)return res.status(409).json({error:'La invitación ya fue respondida'});
  res.json({ok:true});
 }));
+router.post('/calls/:id/hangup',auth,wrap(async(req,res)=>{
+ if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(404).json({error:'Llamada no encontrada'});
+ const q=await pool.query(`UPDATE jsvoice.direct_calls SET status='ended',responded_at=now()
+  WHERE id=$1 AND (caller=$2 OR recipient=$2) AND status='accepted'
+  RETURNING id`,[req.params.id,req.accountId]);
+ if(!q.rowCount)return res.status(409).json({error:'La llamada ya había terminado'});
+ res.json({ok:true});
+}));
 router.use((err,req,res,next)=>{
  console.error('Direct call:',err?.message);
  if(!res.headersSent)res.status(500).json({error:'No se pudo completar la llamada'});
