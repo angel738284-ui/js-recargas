@@ -8,6 +8,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { Server as SocketServer } from 'socket.io';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import accountRouter from './accounts.js';
+import directCallRouter,{configureDirectRooms,directRoomAllowed} from './direct-calls.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const app = express(), httpServer = http.createServer(app);
@@ -42,6 +43,7 @@ app.set('trust proxy', 1);
 app.use(compression({threshold:1024}));
 app.use(express.json({limit:'14kb'}));
 app.use('/api/account',accountRouter);
+app.use('/api/direct',directCallRouter);
 app.get('/.well-known/assetlinks.json',(_req,res)=>{
   res.type('application/json');
   res.set('Cache-Control','public, max-age=3600');
@@ -77,6 +79,14 @@ app.post('/api/rooms',(req,res)=>{
   rooms.set(id,r);
   res.status(201).json({...info(r),hostKey,invite:`${req.protocol}://${req.get('host')}/s/${id}`});
 });
+configureDirectRooms(({caller,recipient,calleeName})=>{
+  const id=rid(),hostKey=randomBytes(32).toString('base64url'),now=Date.now();
+  const r={id,name:clean('Llamada con '+calleeName),mode:'open',hostKey,locked:false,listed:false,
+    directCaller:caller,directRecipient:recipient,users:new Map(),waiting:new Map(),last:now,
+    createdAt:now,prepared:false,preparing:null};
+  rooms.set(id,r);
+  return {id,hostKey};
+});
 function publish(r){
   r.last=Date.now();
   io.to(r.id).emit('room-state',{...info(r),members:[...r.users.entries()].map(([sid,u])=>({socketId:sid,name:u.name,identity:u.identity,host:u.host,moderatorMuted:Boolean(u.moderatorMuted),avatar:u.avatar||'🎮'}))});
@@ -110,10 +120,15 @@ async function admit(r,s,name,host=false,avatar='🎮'){
   }catch(e){console.error('LiveKit:',e?.message);s.emit('join-error','No se pudo conectar al servidor de voz');}
 }
 io.on('connection',s=>{
-  s.on('join-room',async({roomId,name,hostKey,password,avatar}={})=>{
+  s.on('join-room',async({roomId,name,hostKey,password,avatar,accountSession}={})=>{
     if(s.data.room)return s.emit('join-error','Ya estás en una sala');
     const r=rooms.get(String(roomId||''));
     if(!r)return s.emit('join-error','La sala ya no existe');
+    if(r.directCaller){
+      let allowed=false;
+      try{allowed=await directRoomAllowed(r,accountSession)}catch(e){console.error('Access check failed:',e.message)}
+      if(!allowed)return s.emit('join-error','Debés aceptar la llamada con tu cuenta de Google');
+    }
     const owner=Boolean(hostKey&&hostKey===r.hostKey);
     if(r.locked&&!owner)return s.emit('join-error','La sala está bloqueada');
     if(r.users.size>=LIMIT)return s.emit('join-error','La sala está llena');
