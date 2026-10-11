@@ -155,7 +155,7 @@ router.post('/me/photo',auth,async(req,res)=>{
  try{
   let chunks=[],length=0;
   for await(const part of req){
-   length+=part.length;if(length>98304)return res.status(413).json({error:'La foto debe pesar menos de 96 KB'});
+   length+=part.length;if(length>368640)return res.status(413).json({error:'La foto debe pesar menos de 360 KB'});
    chunks.push(part);
   }
   const data=Buffer.concat(chunks);
@@ -195,7 +195,7 @@ router.get('/accounts/:id/photo',run(async(req,res)=>{
  if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.sendStatus(404);
  const result=await pool.query('SELECT photo FROM jsvoice.accounts WHERE id=$1',[req.params.id]);
  if(!result.rowCount||!result.rows[0].photo)return res.sendStatus(404);
- res.set('Cache-Control','public,max-age=120');
+ res.set('Cache-Control','no-cache');
  res.type('jpeg').send(result.rows[0].photo);
 }));
 router.get('/friends/lookup/:code',auth,run(async(req,res)=>{
