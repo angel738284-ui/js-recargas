@@ -40,11 +40,12 @@ function wrap(fn){return async(req,res,next)=>{try{await fn(req,res)}catch(e){ne
 function view(r){return {id:r.id,roomId:r.room_id,status:r.status,otherId:r.other_id,
   name:r.display_name,avatar:r.settings?.avatar||'🎮',
   photo:r.has_photo?'/api/account/accounts/'+r.other_id+'/photo':r.google_photo,
+  banner:r.has_banner?'/api/account/accounts/'+r.other_id+'/banner':null,
   friendCode:r.friend_code,createdAt:r.created_at,expiresAt:r.expires_at};}
 router.get('/calls',auth,wrap(async(req,res)=>{
  await pool.query("UPDATE jsvoice.direct_calls SET status='expired',responded_at=now() WHERE status='ringing' AND expires_at<now()");
  const q=await pool.query(`SELECT c.*,a.id AS other_id,a.display_name,a.settings,
- a.photo IS NOT NULL AS has_photo,a.google_photo,a.friend_code
+ a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.google_photo,a.friend_code
  FROM jsvoice.direct_calls c
  JOIN jsvoice.accounts a ON a.id=CASE WHEN c.caller=$1 THEN c.recipient ELSE c.caller END
  WHERE (c.recipient=$1 OR c.caller=$1) AND c.created_at>now()-interval '2 hours'
