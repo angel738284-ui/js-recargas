@@ -80,10 +80,11 @@ const tiktokUserLastReply = new Map();
 const verityLiveMemory = new Map();
 const tiktokReadQueue = [];
 const YOUTUBE_API_KEY=String(process.env.YOUTUBE_API_KEY||'');
+const YOUTUBE_VOICE_REPLY_V2=true;
 const youtubeState={
-  readerEnabled:false,readerIncludeName:true,autoReply:false,awayMode:false,
+  readerEnabled:false,readerIncludeName:true,autoReply:true,awayMode:false,
   received:0,selected:0,replied:0,readerRead:0,
-  lastComment:null,lastReply:null,error:null,readerError:null
+  lastComment:null,lastReply:null,error:null,readerError:null,lastDecision:"esperando"
 };
 
 
@@ -3047,7 +3048,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
 
 <div class="card">
   <h2>▶️ YouTube LIVE → Verity</h2>
-  <p>Leé y respondé comentarios de tu directo de YouTube con el mismo avatar y voz de Verity. TikTok queda independiente.</p>
+  <p>Verity lee el chat de YouTube y responde también comentarios normales, sin que tengan que nombrarlo. Responde por voz en PRISM con pausas de unos 15 segundos. Podés apagar Responder cuando quieras.</p>
   <input id="youtubeUrl" placeholder="Pegá el enlace de tu directo de YouTube">
   <div class="row">
     <button id="youtubeConnect">▶️ Conectar YouTube</button>
@@ -3063,6 +3064,7 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
   </div>
   <div id="youtubeStatus" class="stats">YouTube desconectado</div>
   <div id="youtubeStats" class="stats"></div>
+  <div id="youtubeLastReply" class="small"></div>
 </div>
 
 <div class="card">
@@ -3441,7 +3443,8 @@ const youtubeNameToggle=document.getElementById('youtubeNameToggle');
 const youtubeTest=document.getElementById('youtubeTest');
 const youtubeStatus=document.getElementById('youtubeStatus');
 const youtubeStats=document.getElementById('youtubeStats');
-let youtubeLiveState={readerEnabled:false,autoReply:false,readerIncludeName:true};
+const youtubeLastReply=document.getElementById('youtubeLastReply');
+let youtubeLiveState={readerEnabled:false,autoReply:true,readerIncludeName:true};
 function renderYoutube(s){
   youtubeLiveState=s;
   if(s.videoId&&!youtubeUrl.value)youtubeUrl.value='https://youtube.com/live/'+s.videoId;
@@ -3450,6 +3453,7 @@ function renderYoutube(s){
   if(s.error)youtubeStatus.textContent+=' · '+s.error;
   if(!s.configured)youtubeStatus.textContent+=' · Falta YOUTUBE_API_KEY en Render';
   youtubeStats.textContent='Recibidos: '+(s.received||0)+' · Leídos: '+(s.readerRead||0)+' · Respondidos: '+(s.replied||0)+' · En cola: '+(s.readerQueued||0);
+  youtubeLastReply.textContent=s.lastReply ? ('Última respuesta a '+s.lastReply.displayName+': '+s.lastReply.reply) : ('Estado de respuestas: '+(s.lastDecision||'esperando'));
   youtubeReadToggle.textContent='🔊 Leer: '+(s.readerEnabled?'ON':'OFF');
   youtubeReplyToggle.textContent='🤖 Responder: '+(s.autoReply?'ON':'OFF');
   youtubeNameToggle.textContent='👤 Decir nombre: '+(s.readerIncludeName?'ON':'OFF');
@@ -3499,6 +3503,7 @@ setInterval(refreshTikTok,5000);
 
 // -------- YouTube Live → Verity (misma cola de audio PRISM) --------
 const youtubeReadQueue = [];
+let lastYoutubeReplyAttemptAt=0;
 const youtubeUserCooldown = new Map();
 let youtubeReadBusy = false;
 function youtubeSnapshot() {
@@ -3531,7 +3536,7 @@ async function drainYoutubeReader() {
     }
   } finally { youtubeReadBusy=false; }
 }
-async function processYoutubeComment({username='',displayName='',comment=''}={}) {
+async function processYoutubeComment({username='',displayName='',comment='',forceReply=false}={}) {
   const cleaned=cleanTikTokReaderText(comment);
   if (!cleaned) return;
   const user=String(username||displayName||'youtube-user').slice(0,80);
@@ -3546,36 +3551,50 @@ async function processYoutubeComment({username='',displayName='',comment=''}={})
     youtubeReadQueue.push({username:user,displayName:display,comment:cleaned,at});
     drainYoutubeReader().catch(()=>{});
   }
-  if (!youtubeState.autoReply) return;
-  const mention=/\b(verity|verety|vereti|veriti|mascota|js)\b/i.test(cleaned);
-  const hostile=isHostileToVerityOrJs(cleaned);
-  if (!mention && !hostile && !(youtubeState.awayMode && Math.random()<0.12)) return;
-  if (tiktokMiniBusy || (at-lastTikTokReplyAt<18000 && !hostile)) return;
+  if (!youtubeState.autoReply && !forceReply) {
+    youtubeState.lastDecision='respuestas_desactivadas';return;
+  }
+  if (/https?:\/\/|www\.|\.com\b/i.test(cleaned)) {
+    youtubeState.lastDecision='enlace_ignorado';return;
+  }
+  if (tiktokMiniBusy) {
+    youtubeState.lastDecision='verity_ocupada';return;
+  }
+  const cooldown=15000;
+  if (!forceReply && (at-Math.max(lastYoutubeReplyAttemptAt,lastTikTokReplyAt))<cooldown) {
+    youtubeState.lastDecision='esperando_turno';return;
+  }
   const previous=youtubeUserCooldown.get(user);
-  if (previous && at-previous<45000 && !hostile) return;
+  if(!forceReply && previous && at-previous<20000) {
+    youtubeState.lastDecision='usuario_reciente';return;
+  }
+  lastYoutubeReplyAttemptAt=at;
   tiktokMiniBusy=true;
   youtubeState.selected++;
+  youtubeState.lastDecision='generando_respuesta';
+  youtubeState.error=null;
   try {
-    let thought;
-    try { thought=await miniJsThink(cleaned,'youtube:'+user,display); }
-    catch(e) { if(!hostile) throw e; thought={should_reply:true,reply:hostileFallbackReply(cleaned),emotion:'serio',animation:'shake',model:'local-defense'}; }
-    if (hostile) {
-      thought.should_reply=true;
-      thought.reply=String(thought.reply||hostileFallbackReply(cleaned)).trim();
-      thought.emotion='serio'; thought.animation='shake';
+    const thought=await miniJsThink(cleaned,'youtube:'+user,display,{forceReply:true});
+    if (!thought?.should_reply || !String(thought.reply||'').trim()) {
+      youtubeState.lastDecision='ia_sin_respuesta';
+      youtubeState.error=String(thought?.error||'El modelo no produjo una respuesta').slice(0,180);
+      return;
     }
-    if (!thought?.should_reply || !thought.reply) return;
     const speechText=miniJsSpokenText(thought.reply,display,user);
     const audioUrl=await makeCommentVoice(speechText);
     lastTikTokReplyAt=Date.now();
     youtubeUserCooldown.set(user,lastTikTokReplyAt);
-    if (youtubeUserCooldown.size>500) youtubeUserCooldown.clear();
+    if(youtubeUserCooldown.size>500)youtubeUserCooldown.clear();
     youtubeState.replied++;
+    youtubeState.lastDecision='respuesta_enviada_a_verity';
     youtubeState.lastReply={username:user,displayName:display,comment:cleaned,reply:thought.reply,at:lastTikTokReplyAt};
     broadcast({type:'audio',url:audioUrl,text:thought.reply,spoken_text:speechText,source:'verity-tiktok-reply',platform:'youtube',voice:'verity',emotion:thought.emotion,animation:thought.animation,username:user,displayName:display,comment:cleaned,at:lastTikTokReplyAt});
     broadcast({type:'youtube_reply',username:user,displayName:display,comment:cleaned,reply:thought.reply,at:lastTikTokReplyAt});
-  } catch(e) { youtubeState.error=String(e?.message||e).slice(0,200); }
-  finally { tiktokMiniBusy=false; }
+  } catch(e) {
+    youtubeState.lastDecision='error_de_respuesta';
+    youtubeState.error=String(e?.message||e).slice(0,200);
+    console.warn('YOUTUBE_REPLY_ERROR',youtubeState.error);
+  } finally { tiktokMiniBusy=false; }
 }
 const youtubeReader=require('./youtube-live')({apiKey:YOUTUBE_API_KEY,onComment:processYoutubeComment,onError:e=>{youtubeState.error=String(e?.message||e).slice(0,200);}});
  // -------- fin YouTube Live --------
@@ -3981,7 +4000,7 @@ const server = http.createServer(async (req, res) => {
         youtubeState.readerEnabled=Boolean(body.readerEnabled);
         if(!youtubeState.readerEnabled) youtubeReadQueue.length=0;
       }
-      if(body.autoReply !== undefined) youtubeState.autoReply=Boolean(body.autoReply);
+      if (body.autoReply !== undefined) { youtubeState.autoReply=Boolean(body.autoReply); youtubeState.lastDecision=youtubeState.autoReply?'respuestas_activadas':'respuestas_desactivadas'; }
       if(body.readerIncludeName !== undefined) youtubeState.readerIncludeName=Boolean(body.readerIncludeName);
       if(body.awayMode !== undefined) youtubeState.awayMode=Boolean(body.awayMode);
       return json(res,200,{ok:true,...youtubeSnapshot()});
@@ -3992,7 +4011,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body=await readJson(req);
       const comment=String(body.comment||'Verity, ¿cómo va el directo?').slice(0,220);
-      await processYoutubeComment({username:'youtube-test',displayName:String(body.displayName||'Prueba YouTube').slice(0,60),comment});
+      await processYoutubeComment({username:'youtube-test',displayName:String(body.displayName||'Prueba YouTube').slice(0,60),comment,forceReply:true});
       return json(res,200,{ok:true,...youtubeSnapshot()});
     }catch(e){return json(res,400,{ok:false,error:String(e?.message||e)});}
   }
