@@ -2964,122 +2964,209 @@ function makeMiniJsControlPage(key) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Verity · Cerebro del LIVE</title>
-<style>
-body{margin:0;background:#101010;color:#fff;font-family:system-ui;padding:18px}
-.card{max-width:620px;margin:0 auto 16px;background:#1b1b1b;border-radius:20px;padding:18px}
-h2{margin:0 0 8px}
-p{opacity:.8;line-height:1.4}
-input,textarea,select{width:100%;box-sizing:border-box;background:#282828;color:#fff;border:1px solid #444;border-radius:12px;padding:13px;font-size:16px;margin-top:10px}
-textarea{min-height:105px;resize:vertical}
-button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:800;margin-top:10px;background:#fff;color:#111}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.danger{background:#3a2020;color:#fff}
-.on{background:#71e67d;color:#102214}
-#status,#tiktokStatus{margin-top:14px;font-weight:700}
-#result,#lastLive{white-space:pre-line;margin-top:12px;line-height:1.5}
-.small{opacity:.65;font-size:13px;margin-top:10px}
-.stats{opacity:.8;font-size:14px;margin-top:10px}
+<title>JS LIVE · Panel de transmisiones</title>
+<style>:root{color-scheme:dark;--bg:#091013;--card:#111b1e;--edge:#27363a;--sub:#9faeb1;--fg:#f3f7f7;--mint:#a3f2c8;--mintD:#14291f}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% -15%,#19302c 0%,#091013 52%);color:var(--fg);font-family:system-ui,-apple-system,Roboto,sans-serif;padding:18px 15px 70px}
+.workspace{max-width:940px;margin:0 auto}
+.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:7px 0 25px}
+.brand{display:flex;align-items:center;gap:13px}
+.brand-mark{width:46px;height:46px;border-radius:15px;background:var(--mint);color:#11201a;display:grid;place-items:center;font-size:20px;font-weight:950;letter-spacing:-2px}
+.brand h1{margin:0;font-size:19px;letter-spacing:.04em;font-weight:900}
+.brand p{margin:3px 0 0;color:var(--sub);font-size:12px}
+.live-pill{border:1px solid #305f49;color:#b3ebcb;background:#10261b;padding:7px 11px;border-radius:99px;font-size:12px;font-weight:800;white-space:nowrap}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#8ef4ad;margin-right:6px;box-shadow:0 0 0 3px #22472e}
+.hero{background:linear-gradient(127deg,#1e3230,#12201e);border:1px solid #35524a;border-radius:23px;padding:23px;margin-bottom:18px}
+.hero h2{margin:0 0 7px;font-size:25px;line-height:1.1;letter-spacing:-.6px}
+.hero p{color:#cad9d7;line-height:1.5;margin:0 0 18px;font-size:14px}
+.quick-actions{display:flex;flex-wrap:wrap;gap:10px}
+.main-label{font-size:12px;font-weight:800;letter-spacing:.12em;color:#a6b8b6;margin:24px 2px 12px}
+.platform-grid{display:grid;grid-template-columns:1fr 1fr;align-items:start;gap:15px}
+.card{padding:20px;background:var(--card);border:1px solid var(--edge);border-radius:22px;min-width:0}
+.platform-head{display:flex;gap:12px;align-items:center;margin-bottom:17px}
+.platform-icon{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:21px;font-weight:950;flex-shrink:0}
+.yt-icon{background:#381c22;color:#ff8891}.tt-icon{background:#183237;color:#8ee9f0}
+.platform-head h2{font-size:18px;margin:0 0 3px;font-weight:850}
+.platform-head .platform-sub{color:var(--sub);font-size:12px}
+label.field-label{display:block;margin-bottom:9px;font-size:13px;color:#c0d0ce;font-weight:750}
+input,textarea,select{width:100%;background:#0b1316;color:var(--fg);border:1px solid #334348;border-radius:13px;padding:14px;font:inherit;font-size:15px;outline:none;min-width:0}
+input:focus,textarea:focus,select:focus{border-color:#87d5b0;box-shadow:0 0 0 2px #87d5b033}
+input::placeholder,textarea::placeholder{color:#728487}
+textarea{min-height:90px;resize:vertical}
+button{font:inherit;cursor:pointer;border:1px solid #324247;border-radius:13px;background:#203032;color:#f2fafa;padding:12px 14px;font-weight:800;font-size:14px;min-width:0}
+button:disabled{opacity:.55;cursor:wait}
+button.main-action{background:var(--mint);border-color:var(--mint);color:#0c2115}
+button.ghost{background:#142024;border-color:#304244;color:#c9d5d4}
+button.danger{background:#231b1e;border-color:#453034;color:#df9899}
+button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}
+.action-row{display:grid;grid-template-columns:1.7fr 1fr;gap:9px;margin-top:10px}
+.switches{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+.switchbtn{font-size:13px;min-height:50px}
+.statusline{margin-top:16px;padding:12px 13px;border-radius:12px;background:#0b1518;color:#b8c7c8;border:1px solid #203239;font-size:13px;line-height:1.45}
+.stats{font-size:12px;color:#849ba0;margin:9px 2px 0;line-height:1.5}
+.activityline{margin:13px 0 0;color:#aababb;font-size:12px;line-height:1.55}
+.platform-footnote{color:#7f9497;font-size:12px;line-height:1.5;margin:13px 1px 0}
+.advanced{margin-top:22px;background:#111a1d;border:1px solid #2a383d;border-radius:21px;overflow:hidden}
+.advanced>summary{list-style:none;cursor:pointer;padding:20px;display:flex;align-items:center;justify-content:space-between;font-weight:850}
+.advanced>summary::-webkit-details-marker{display:none}
+.advanced>summary span{display:block;color:var(--sub);font-weight:500;font-size:12px;margin-top:4px}
+.advanced[open]>summary{border-bottom:1px solid var(--edge)}
+.advanced[open]>summary:after{content:"−"}
+.advanced>summary:after{content:"+";font-size:21px}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px}
+.setting-card{border:1px solid #26373c;border-radius:15px;padding:16px;background:#121f22;min-width:0}
+.setting-card h3{font-size:15px;margin:0 0 10px}
+.setting-card p{font-size:12px;color:var(--sub);line-height:1.5}
+.setting-card button{margin-top:9px;width:100%}
+.setting-card input,.setting-card textarea,.setting-card select{margin-top:9px}
+#result,#lastLive,#readerTestStatus,#youtubeLastReply{white-space:pre-line;overflow-wrap:anywhere;line-height:1.5}
+#readerTestStatus,#status{color:#aebec0;font-size:13px;margin-top:10px}
+.section-title{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8da4a7;margin:12px 0 9px}
+.footer-note{text-align:center;color:#688186;font-size:12px;margin:20px auto}
+@media(max-width:700px){.platform-grid,.settings-grid{grid-template-columns:1fr}.header{margin-bottom:20px}.hero h2{font-size:22px}.hero{padding:20px}.card{padding:18px}.settings-grid{padding:12px}.live-pill{font-size:11px;padding:6px 8px}.switches{gap:7px}.switchbtn{padding:12px 7px}}
+@media(max-width:360px){.row,.action-row{grid-template-columns:1fr}.switches{grid-template-columns:1fr}.header .brand h1{font-size:17px}}
 </style>
 </head>
 <body>
-<div class="card">
-  <h2>📡 TikTok LIVE → Verity</h2>
-  <p>Verity puede leer comentarios y también responder algunos con su propia personalidad.</p>
-  <input id="liveUser" placeholder="@usuario de TikTok">
-  <select id="mode">
-    <option value="low">Baja · habla poco</option>
-    <option value="medium" selected>Media · recomendado</option>
-    <option value="high">Alta · habla más seguido</option>
-  </select>
-  <button id="connectTikTok">Conectar TikTok LIVE</button>
-  <div class="row">
-    <button id="toggleAuto">🤖 Verity responde comentarios: OFF</button>
-    <button id="disconnectTikTok" class="danger">Desconectar</button>
-  </div>
-  <button id="toggleAway">⏳ JS ya regresa</button>
-  <div class="row">
-    <button id="toggleReader">🔊 Verity comentarios: OFF</button>
-    <button id="testReader">🎧 Probar Verity</button>
-  </div>
-  <div class="row">
-    <button id="toggleReaderName">👤 Decir nombre: ON</button>
-    <button id="clearReader" class="danger">🧹 Vaciar cola</button>
-  </div>
-  <input id="readerTestName" placeholder="Nombre de prueba, ej: Lucas">
-  <textarea id="readerTestComment" placeholder="Comentario de prueba, ej: JS, saludame por favor"></textarea>
-  <button id="readerTestCommentBtn">💬 Probar comentario con Verity</button>
-
-  <div style="margin-top:14px;padding:14px;background:#242424;border-radius:14px">
-    <b>🎁 Probador de regalos</b>
-    <select id="giftTestName">
-      <option value="Rosa">🌹 Rosa</option>
-      <option value="TikTok">🎵 TikTok</option>
-      <option value="Corazón">❤️ Corazón</option>
-      <option value="GG">🔥 GG</option>
-      <option value="León">🦁 León</option>
-      <option value="Universo">🌌 Universo</option>
-      <option value="Regalo">🎁 Otro regalo</option>
-    </select>
-    <div class="row">
-      <input id="giftTestCount" type="number" min="1" value="1" placeholder="Cantidad">
-      <input id="giftTestDiamonds" type="number" min="0" value="1" placeholder="Diamantes">
+<!-- JS_LIVE_PRO_PANEL_V1 -->
+<div class="workspace">
+  <header class="header">
+    <div class="brand">
+      <div class="brand-mark">JS</div>
+      <div><h1>JS LIVE</h1><p>Centro de transmisiones · Verity</p></div>
     </div>
-    <button id="giftTestBtn">🎁 Probar regalo</button>
+    <div class="live-pill"><span class="live-dot"></span>Panel activo</div>
+  </header>
+
+  <section class="hero">
+    <h2>Tu directo, en un solo lugar.</h2>
+    <p>Conectá YouTube o TikTok y Verity podrá leer y responder comentarios por voz. Las opciones de prueba están guardadas en Ajustes.</p>
+    <div class="quick-actions">
+      <button id="quickCopyPrism" class="main-action">↗ Copiar enlace para PRISM</button>
+      <button id="quickOpenPrism" class="ghost">🎭 Abrir Verity</button>
+    </div>
+    <div id="quickStatus" class="platform-footnote">Para que se escuche en el directo, agregá Verity como fuente web en PRISM y activá su audio.</div>
+  </section>
+
+  <div class="main-label">01 · CONECTÁ TU TRANSMISIÓN</div>
+  <div class="platform-grid">
+    <section class="card">
+      <div class="platform-head"><div class="platform-icon yt-icon">▶</div><div><h2>YouTube Live</h2><div class="platform-sub">Enlace del video en vivo</div></div></div>
+      <label class="field-label" for="youtubeUrl">Enlace de YouTube</label>
+      <input id="youtubeUrl" type="url" inputmode="url" placeholder="https://youtube.com/live/..." autocomplete="off" spellcheck="false">
+      <div class="action-row">
+        <button id="youtubeConnect" class="main-action">Conectar y activar</button>
+        <button id="youtubeDisconnect" class="danger">Desconectar</button>
+      </div>
+      <div class="switches">
+        <button id="youtubeReadToggle" class="switchbtn">🔊 Leer: OFF</button>
+        <button id="youtubeReplyToggle" class="switchbtn">🤖 Responder: OFF</button>
+      </div>
+      <div id="youtubeStatus" class="statusline">YouTube desconectado</div>
+      <div id="youtubeStats" class="stats">Esperando conexión…</div>
+      <div id="youtubeLastReply" class="activityline"></div>
+      <div class="platform-footnote">Al conectar se habilitan la lectura y las respuestas de Verity.</div>
+    </section>
+
+    <section class="card">
+      <div class="platform-head"><div class="platform-icon tt-icon">♪</div><div><h2>TikTok Live</h2><div class="platform-sub">Usuario o enlace del perfil</div></div></div>
+      <label class="field-label" for="liveUser">Cuenta de TikTok</label>
+      <input id="liveUser" type="text" placeholder="@usuario o enlace de TikTok" spellcheck="false" autocapitalize="none">
+      <div class="action-row">
+        <button id="connectTikTok" class="main-action">Conectar y activar</button>
+        <button id="disconnectTikTok" class="danger">Desconectar</button>
+      </div>
+      <div class="switches">
+        <button id="toggleReader" class="switchbtn">🔊 Leer: OFF</button>
+        <button id="toggleAuto" class="switchbtn">🤖 Responder: OFF</button>
+      </div>
+      <div id="tiktokStatus" class="statusline">TikTok desconectado</div>
+      <div id="tiktokStats" class="stats">Esperando conexión…</div>
+      <div id="lastLive" class="activityline">Esperando comentarios…</div>
+      <div class="platform-footnote">Podés detener la lectura o las respuestas cuando quieras.</div>
+    </section>
   </div>
 
-  <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
-  <div id="readerTestStatus" class="small">La prueba suena en este celular y también se envía a /verity, que ahora incluye imagen + voz.</div>
-  <button id="copyCommentsUrl">📋 Copiar Verity imagen + voz para PRISM</button>
-  <input id="commentsUrl" readonly>
-  <div class="row">
-    <button id="openVerity">🎭 Control Mini Verity</button>
-    <button id="copyVerityUrl">📋 Copiar /verity</button>
-  </div>
-  <input id="verityUrl" readonly>
-  <button id="copyChatUrl">📺 Copiar panel visual de comentarios</button>
-  <input id="chatUrl" readonly>
-  <button id="testChat">🧪 Mostrar comentario en pantalla (sin voz)</button>
-  <div id="tiktokStatus">TikTok desconectado</div>
-  <div id="tiktokStats" class="stats"></div>
-  <div id="lastLive">Esperando comentarios…</div>
-  <div class="small">Media responde como máximo aprox. una vez cada 12 s y evita repetir al mismo usuario seguido.</div>
-</div>
+  <details class="advanced" id="advancedSettings">
+    <summary><div>⚙️ Ajustes y herramientas <span>Pruebas de voz, nombres, regalos y enlaces adicionales</span></div></summary>
+    <div class="settings-grid">
+      <div class="setting-card">
+        <h3>🎙️ Preferencias de Verity</h3>
+        <div class="section-title">TikTok · Frecuencia de respuesta</div>
+        <select id="mode">
+          <option value="low">Baja · responde poco</option>
+          <option value="medium" selected>Media · recomendada</option>
+          <option value="high">Alta · responde más</option>
+        </select>
+        <button id="toggleAway">⏳ JS ya regresa</button>
+        <button id="toggleReaderName">👤 TikTok: decir nombre ON</button>
+        <button id="youtubeNameToggle">👤 YouTube: decir nombre ON</button>
+        <button id="clearReader" class="danger">🧹 Limpiar cola TikTok</button>
+      </div>
 
-<div class="card">
-  <h2>▶️ YouTube LIVE → Verity</h2>
-  <p>Verity lee el chat de YouTube y responde también comentarios normales, sin que tengan que nombrarlo. Responde por voz en PRISM con pausas de unos 15 segundos. Podés apagar Responder cuando quieras.</p>
-  <input id="youtubeUrl" placeholder="Pegá el enlace de tu directo de YouTube">
-  <div class="row">
-    <button id="youtubeConnect">▶️ Conectar YouTube</button>
-    <button id="youtubeDisconnect" class="danger">Desconectar</button>
-  </div>
-  <div class="row">
-    <button id="youtubeReadToggle">🔊 Leer: OFF</button>
-    <button id="youtubeReplyToggle">🤖 Responder: OFF</button>
-  </div>
-  <div class="row">
-    <button id="youtubeNameToggle">👤 Decir nombre: ON</button>
-    <button id="youtubeTest">🧪 Probar comentario</button>
-  </div>
-  <div id="youtubeStatus" class="stats">YouTube desconectado</div>
-  <div id="youtubeStats" class="stats"></div>
-  <div id="youtubeLastReply" class="small"></div>
-</div>
+      <div class="setting-card">
+        <h3>🧪 Probar comentarios</h3>
+        <p>Las pruebas se escuchan también en el overlay de Verity si está abierto.</p>
+        <button id="testReader">🎧 Probar voz de Verity</button>
+        <button id="youtubeTest">▶ Probar comentario YouTube</button>
+        <input id="readerTestName" placeholder="Nombre de prueba (opcional)">
+        <textarea id="readerTestComment" placeholder="Escribí un comentario para probar"></textarea>
+        <button id="readerTestCommentBtn">💬 Probar lectura del comentario</button>
+        <button id="dramaTestBtn">😈 Probar voz Drama 3</button>
+        <div id="readerTestStatus" class="activityline">Preparado para las pruebas.</div>
+      </div>
 
-<div class="card">
-  <h2>🤖 Verity · Prueba manual</h2>
-  <p>Probá cómo respondería Verity antes de usarlo en el LIVE. GPT 6 Luna es el cerebro rápido; Sol y Gemini quedan como respaldo.</p>
-  <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
-  <textarea id="comment" placeholder="Comentario, ej: JS sos re manco 😂"></textarea>
-  <button id="send">Probar comentario</button>
-  <div id="status">Listo para probar</div>
-  <div id="result"></div>
+      <div class="setting-card">
+        <h3>🎁 Probar regalos de TikTok</h3>
+        <select id="giftTestName">
+          <option value="Rosa">🌹 Rosa</option>
+          <option value="TikTok">🎵 TikTok</option>
+          <option value="Corazón">❤️ Corazón</option>
+          <option value="GG">🔥 GG</option>
+          <option value="León">🦁 León</option>
+          <option value="Universo">🌌 Universo</option>
+          <option value="Regalo">🎁 Otro regalo</option>
+        </select>
+        <div class="row"><input id="giftTestCount" type="number" min="1" value="1" placeholder="Cantidad"><input id="giftTestDiamonds" type="number" min="0" value="1" placeholder="Diamantes"></div>
+        <button id="giftTestBtn">🎁 Probar regalo</button>
+      </div>
+
+      <div class="setting-card">
+        <h3>📺 Fuentes para PRISM</h3>
+        <p>Usá /verity para imagen y voz en un solo overlay.</p>
+        <button id="copyCommentsUrl">📋 Copiar Verity para PRISM</button>
+        <input id="commentsUrl" readonly>
+        <button id="copyVerityUrl">📋 Copiar enlace de voz e imagen</button>
+        <input id="verityUrl" readonly>
+        <button id="openVerity">🎭 Abrir controles del avatar</button>
+        <button id="copyChatUrl">📋 Copiar overlay de comentarios</button>
+        <input id="chatUrl" readonly>
+        <button id="testChat">🧪 Probar comentario visual</button>
+      </div>
+
+      <div class="setting-card">
+        <h3>🤖 Laboratorio de respuestas</h3>
+        <p>Probá qué respondería Verity sin esperar un comentario real.</p>
+        <input id="username" placeholder="Nombre del espectador (opcional)">
+        <textarea id="comment" placeholder="Escribí el comentario de prueba"></textarea>
+        <button id="send">Generar respuesta de prueba</button>
+        <div id="status" class="activityline">Listo para probar.</div>
+        <div id="result" class="activityline"></div>
+      </div>
+    </div>
+  </details>
+  <div class="footer-note">JS LIVE · Una sola página para controlar tu transmisión</div>
 </div>
 
 <audio id="audio" playsinline></audio>
 <script>
 const KEY=${JSON.stringify(key)};
+const quickCopyPrism=document.getElementById('quickCopyPrism');
+const quickOpenPrism=document.getElementById('quickOpenPrism');
+const quickStatus=document.getElementById('quickStatus');
+quickCopyPrism.onclick=async()=>{const url=location.origin+'/verity';try{await navigator.clipboard.writeText(url);quickStatus.textContent='✅ Enlace de Verity copiado. Pegalo como fuente web en PRISM.';}catch{const tmp=document.createElement('textarea');tmp.value=url;document.body.appendChild(tmp);tmp.select();try{document.execCommand('copy');quickStatus.textContent='✅ Enlace copiado para PRISM.';}catch{quickStatus.textContent='Copiá este enlace: '+url;}tmp.remove();}};
+quickOpenPrism.onclick=()=>{window.open(location.origin+'/verity','_blank','noopener');};
 const send=document.getElementById('send');
 const comment=document.getElementById('comment');
 const username=document.getElementById('username');
@@ -3227,17 +3314,21 @@ async function refreshTikTok(){
 }
 
 connectTikTok.onclick=async()=>{
-  const u=liveUser.value.trim();
-  if(!u){tiktokStatus.textContent='Escribí tu @usuario de TikTok';return;}
+  const raw=liveUser.value.trim();
+  const m=raw.match(/tiktok\.com\/@([A-Za-z0-9._]+)/i);
+  const u=m?('@'+m[1]):raw;
+  if(!u){tiktokStatus.textContent='Pegá un usuario o enlace de TikTok';return;}
   connectTikTok.disabled=true;
-  tiktokStatus.textContent='🟡 Conectando… el LIVE tiene que estar iniciado';
+  tiktokStatus.textContent='🟡 Conectando con TikTok…';
   try{
-    renderTikTok(await api('/api/tiktok/connect',{username:u}));
-  }catch(e){
-    tiktokStatus.textContent='🔴 '+String(e.message||e);
-  }finally{
-    connectTikTok.disabled=false;
-  }
+    await api('/api/tiktok/connect',{username:u});
+    let activationError='';
+    try {await api('/api/tiktok/reader',{enabled:true});await api('/api/tiktok/auto',{enabled:true,mode:mode.value});}
+    catch(e){activationError=String(e.message||e);}
+    renderTikTok(await api('/api/tiktok/status',undefined,'GET'));
+    if(activationError)tiktokStatus.textContent+=' · Activación parcial: '+activationError;
+  }catch(e){tiktokStatus.textContent='🔴 '+String(e.message||e);}
+  finally{connectTikTok.disabled=false;}
 };
 
 disconnectTikTok.onclick=async()=>{
@@ -3464,8 +3555,12 @@ function renderYoutube(s){
 async function refreshYoutube(){try{renderYoutube(await api('/api/youtube/status',undefined,'GET'));}catch(e){youtubeStatus.textContent=String(e.message||e);}}
 youtubeConnect.onclick=async()=>{
   youtubeConnect.disabled=true;
-  try{renderYoutube(await api('/api/youtube/connect',{url:youtubeUrl.value.trim()}));}
-  catch(e){youtubeStatus.textContent='🔴 '+String(e.message||e);}
+  youtubeStatus.textContent='🟡 Conectando con YouTube…';
+  try{
+    await api('/api/youtube/connect',{url:youtubeUrl.value.trim()});
+    try{renderYoutube(await api('/api/youtube/options',{readerEnabled:true,autoReply:true}));}
+    catch(e){await refreshYoutube();youtubeStatus.textContent+=' · Activación parcial: '+String(e.message||e);}
+  }catch(e){youtubeStatus.textContent='🔴 '+String(e.message||e);}
   finally{youtubeConnect.disabled=false;}
 };
 youtubeDisconnect.onclick=async()=>{try{renderYoutube(await api('/api/youtube/disconnect',{}));}catch(e){youtubeStatus.textContent=String(e.message||e);}};
