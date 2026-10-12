@@ -79,6 +79,13 @@ const tiktokSeen = new Map();
 const tiktokUserLastReply = new Map();
 const verityLiveMemory = new Map();
 const tiktokReadQueue = [];
+const YOUTUBE_API_KEY=String(process.env.YOUTUBE_API_KEY||'');
+const youtubeState={
+  readerEnabled:false,readerIncludeName:true,autoReply:false,awayMode:false,
+  received:0,selected:0,replied:0,readerRead:0,
+  lastComment:null,lastReply:null,error:null,readerError:null
+};
+
 
 async function initVerityDb() {
   if (!verityDb) return;
@@ -3039,6 +3046,26 @@ button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-w
 </div>
 
 <div class="card">
+  <h2>▶️ YouTube LIVE → Verity</h2>
+  <p>Leé y respondé comentarios de tu directo de YouTube con el mismo avatar y voz de Verity. TikTok queda independiente.</p>
+  <input id="youtubeUrl" placeholder="Pegá el enlace de tu directo de YouTube">
+  <div class="row">
+    <button id="youtubeConnect">▶️ Conectar YouTube</button>
+    <button id="youtubeDisconnect" class="danger">Desconectar</button>
+  </div>
+  <div class="row">
+    <button id="youtubeReadToggle">🔊 Leer: OFF</button>
+    <button id="youtubeReplyToggle">🤖 Responder: OFF</button>
+  </div>
+  <div class="row">
+    <button id="youtubeNameToggle">👤 Decir nombre: ON</button>
+    <button id="youtubeTest">🧪 Probar comentario</button>
+  </div>
+  <div id="youtubeStatus" class="stats">YouTube desconectado</div>
+  <div id="youtubeStats" class="stats"></div>
+</div>
+
+<div class="card">
   <h2>🤖 Verity · Prueba manual</h2>
   <p>Probá cómo respondería Verity antes de usarlo en el LIVE. GPT 6 Luna es el cerebro rápido; Sol y Gemini quedan como respaldo.</p>
   <input id="username" placeholder="Usuario (opcional), ej: lucas_ff">
@@ -3405,6 +3432,45 @@ send.onclick=async()=>{
   }
 };
 
+const youtubeUrl=document.getElementById('youtubeUrl');
+const youtubeConnect=document.getElementById('youtubeConnect');
+const youtubeDisconnect=document.getElementById('youtubeDisconnect');
+const youtubeReadToggle=document.getElementById('youtubeReadToggle');
+const youtubeReplyToggle=document.getElementById('youtubeReplyToggle');
+const youtubeNameToggle=document.getElementById('youtubeNameToggle');
+const youtubeTest=document.getElementById('youtubeTest');
+const youtubeStatus=document.getElementById('youtubeStatus');
+const youtubeStats=document.getElementById('youtubeStats');
+let youtubeLiveState={readerEnabled:false,autoReply:false,readerIncludeName:true};
+function renderYoutube(s){
+  youtubeLiveState=s;
+  if(s.videoId&&!youtubeUrl.value)youtubeUrl.value='https://youtube.com/live/'+s.videoId;
+  const labels={disconnected:'⚪ YouTube desconectado',connecting:'🟡 Conectando…',connected:'🟢 YouTube conectado',ended:'⚪ Directo finalizado',error:'🔴 Error YouTube'};
+  youtubeStatus.textContent=labels[s.status]||s.status||'YouTube';
+  if(s.error)youtubeStatus.textContent+=' · '+s.error;
+  if(!s.configured)youtubeStatus.textContent+=' · Falta YOUTUBE_API_KEY en Render';
+  youtubeStats.textContent='Recibidos: '+(s.received||0)+' · Leídos: '+(s.readerRead||0)+' · Respondidos: '+(s.replied||0)+' · En cola: '+(s.readerQueued||0);
+  youtubeReadToggle.textContent='🔊 Leer: '+(s.readerEnabled?'ON':'OFF');
+  youtubeReplyToggle.textContent='🤖 Responder: '+(s.autoReply?'ON':'OFF');
+  youtubeNameToggle.textContent='👤 Decir nombre: '+(s.readerIncludeName?'ON':'OFF');
+  youtubeReadToggle.classList.toggle('on',Boolean(s.readerEnabled));
+  youtubeReplyToggle.classList.toggle('on',Boolean(s.autoReply));
+  youtubeNameToggle.classList.toggle('on',Boolean(s.readerIncludeName));
+}
+async function refreshYoutube(){try{renderYoutube(await api('/api/youtube/status',undefined,'GET'));}catch(e){youtubeStatus.textContent=String(e.message||e);}}
+youtubeConnect.onclick=async()=>{
+  youtubeConnect.disabled=true;
+  try{renderYoutube(await api('/api/youtube/connect',{url:youtubeUrl.value.trim()}));}
+  catch(e){youtubeStatus.textContent='🔴 '+String(e.message||e);}
+  finally{youtubeConnect.disabled=false;}
+};
+youtubeDisconnect.onclick=async()=>{try{renderYoutube(await api('/api/youtube/disconnect',{}));}catch(e){youtubeStatus.textContent=String(e.message||e);}};
+youtubeReadToggle.onclick=async()=>{try{renderYoutube(await api('/api/youtube/options',{readerEnabled:!youtubeLiveState.readerEnabled}));}catch(e){youtubeStatus.textContent=String(e.message||e);}};
+youtubeReplyToggle.onclick=async()=>{try{renderYoutube(await api('/api/youtube/options',{autoReply:!youtubeLiveState.autoReply}));}catch(e){youtubeStatus.textContent=String(e.message||e);}};
+youtubeNameToggle.onclick=async()=>{try{renderYoutube(await api('/api/youtube/options',{readerIncludeName:!youtubeLiveState.readerIncludeName}));}catch(e){youtubeStatus.textContent=String(e.message||e);}};
+youtubeTest.onclick=async()=>{try{renderYoutube(await api('/api/youtube/comment/test',{comment:'Verity, ¿cómo va el directo?',displayName:'Prueba YouTube'}));youtubeStatus.textContent='✅ Comentario de prueba enviado';}catch(e){youtubeStatus.textContent=String(e.message||e);}};
+refreshYoutube();setInterval(refreshYoutube,5000);
+
 const events=new EventSource('/events');
 events.onmessage=(ev)=>{
   try{
@@ -3431,6 +3497,88 @@ setInterval(refreshTikTok,5000);
 </html>`;
 }
 
+// -------- YouTube Live → Verity (misma cola de audio PRISM) --------
+const youtubeReadQueue = [];
+const youtubeUserCooldown = new Map();
+let youtubeReadBusy = false;
+function youtubeSnapshot() {
+  return { ...youtubeState, ...youtubeReader.snapshot(), readerConfigured: Boolean(FISH_COMMENT_API_KEY), readerQueued: youtubeReadQueue.length, busy: tiktokMiniBusy };
+}
+async function drainYoutubeReader() {
+  if (youtubeReadBusy) return;
+  youtubeReadBusy = true;
+  try {
+    while (youtubeState.readerEnabled && youtubeReadQueue.length) {
+      const item = youtubeReadQueue.shift();
+      if (Date.now() - item.at > 15000) continue;
+      const text = cleanTikTokReaderText(item.comment);
+      if (!text) continue;
+      const name = safeTikTokReaderName(item.displayName || item.username);
+      const spoken = text.replace(/\bjs\b/gi, 'jota ese');
+      const speechText = youtubeState.readerIncludeName && name ? name + ' dice: ' + spoken : spoken;
+      try {
+        const audioUrl = await makeCommentVoice(speechText);
+        youtubeState.readerRead++;
+        youtubeState.readerError = null;
+        broadcast({type:'audio',url:audioUrl,text:item.comment,spoken_text:speechText,source:'tiktok-comment-reader',platform:'youtube',voice:'verity',username:item.username,displayName:item.displayName,comment:item.comment,at:Date.now()});
+      } catch(e) {
+        youtubeState.readerError=String(e?.message||e).slice(0,200);
+        if (/fish_comment_http_(401|403)|fish_comment_api_key_missing/.test(youtubeState.readerError)) {
+          youtubeState.readerEnabled=false;
+          youtubeReadQueue.length=0;
+        }
+      }
+    }
+  } finally { youtubeReadBusy=false; }
+}
+async function processYoutubeComment({username='',displayName='',comment=''}={}) {
+  const cleaned=cleanTikTokReaderText(comment);
+  if (!cleaned) return;
+  const user=String(username||displayName||'youtube-user').slice(0,80);
+  const display=String(displayName||'Espectador').slice(0,80);
+  const at=Date.now();
+  youtubeState.received++;
+  youtubeState.lastComment={username:user,displayName:display,comment:cleaned,at};
+  broadcast({type:'youtube_comment',username:user,displayName:display,comment:cleaned,at});
+  broadcast({type:'tiktok_chat_display',name:safeTikTokReaderName(display)||'Espectador',comment:cleaned,platform:'youtube',at});
+  if (youtubeState.readerEnabled) {
+    if (youtubeReadQueue.length>=5) youtubeReadQueue.shift();
+    youtubeReadQueue.push({username:user,displayName:display,comment:cleaned,at});
+    drainYoutubeReader().catch(()=>{});
+  }
+  if (!youtubeState.autoReply) return;
+  const mention=/\b(verity|verety|vereti|veriti|mascota|js)\b/i.test(cleaned);
+  const hostile=isHostileToVerityOrJs(cleaned);
+  if (!mention && !hostile && !(youtubeState.awayMode && Math.random()<0.12)) return;
+  if (tiktokMiniBusy || (at-lastTikTokReplyAt<18000 && !hostile)) return;
+  const previous=youtubeUserCooldown.get(user);
+  if (previous && at-previous<45000 && !hostile) return;
+  tiktokMiniBusy=true;
+  youtubeState.selected++;
+  try {
+    let thought;
+    try { thought=await miniJsThink(cleaned,'youtube:'+user,display); }
+    catch(e) { if(!hostile) throw e; thought={should_reply:true,reply:hostileFallbackReply(cleaned),emotion:'serio',animation:'shake',model:'local-defense'}; }
+    if (hostile) {
+      thought.should_reply=true;
+      thought.reply=String(thought.reply||hostileFallbackReply(cleaned)).trim();
+      thought.emotion='serio'; thought.animation='shake';
+    }
+    if (!thought?.should_reply || !thought.reply) return;
+    const speechText=miniJsSpokenText(thought.reply,display,user);
+    const audioUrl=await makeCommentVoice(speechText);
+    lastTikTokReplyAt=Date.now();
+    youtubeUserCooldown.set(user,lastTikTokReplyAt);
+    if (youtubeUserCooldown.size>500) youtubeUserCooldown.clear();
+    youtubeState.replied++;
+    youtubeState.lastReply={username:user,displayName:display,comment:cleaned,reply:thought.reply,at:lastTikTokReplyAt};
+    broadcast({type:'audio',url:audioUrl,text:thought.reply,spoken_text:speechText,source:'verity-tiktok-reply',platform:'youtube',voice:'verity',emotion:thought.emotion,animation:thought.animation,username:user,displayName:display,comment:cleaned,at:lastTikTokReplyAt});
+    broadcast({type:'youtube_reply',username:user,displayName:display,comment:cleaned,reply:thought.reply,at:lastTikTokReplyAt});
+  } catch(e) { youtubeState.error=String(e?.message||e).slice(0,200); }
+  finally { tiktokMiniBusy=false; }
+}
+const youtubeReader=require('./youtube-live')({apiKey:YOUTUBE_API_KEY,onComment:processYoutubeComment,onError:e=>{youtubeState.error=String(e?.message||e).slice(0,200);}});
+ // -------- fin YouTube Live --------
 const chatPage = require('./chat-overlay');
 const spotify = require('./spotify');
 
@@ -3803,6 +3951,50 @@ const server = http.createServer(async (req, res) => {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+
+  if (req.method === 'GET' && u.pathname === '/api/youtube/status') {
+    if (!isControllerAuthorized(req)) return json(res,401,{ok:false,error:'unauthorized'});
+    return json(res,200,{ok:true,...youtubeSnapshot()});
+  }
+  if (req.method === 'POST' && u.pathname === '/api/youtube/connect') {
+    if (!isControllerAuthorized(req)) return json(res,401,{ok:false,error:'unauthorized'});
+    try {
+      const body=await readJson(req);
+      await youtubeReader.connect(body.url);
+      youtubeState.error=null;
+      return json(res,200,{ok:true,...youtubeSnapshot()});
+    } catch(e) {return json(res,400,{ok:false,error:String(e?.message||e).slice(0,200),...youtubeSnapshot()});}
+  }
+  if (req.method === 'POST' && u.pathname === '/api/youtube/disconnect') {
+    if (!isControllerAuthorized(req)) return json(res,401,{ok:false,error:'unauthorized'});
+    youtubeReader.disconnect();
+    youtubeReadQueue.length=0;
+    return json(res,200,{ok:true,...youtubeSnapshot()});
+  }
+  if (req.method === 'POST' && u.pathname === '/api/youtube/options') {
+    if (!isControllerAuthorized(req)) return json(res,401,{ok:false,error:'unauthorized'});
+    try {
+      const body=await readJson(req);
+      if (body.readerEnabled !== undefined) {
+        if (body.readerEnabled && !FISH_COMMENT_API_KEY) return json(res,400,{ok:false,error:'fish_comment_api_key_missing'});
+        youtubeState.readerEnabled=Boolean(body.readerEnabled);
+        if(!youtubeState.readerEnabled) youtubeReadQueue.length=0;
+      }
+      if(body.autoReply !== undefined) youtubeState.autoReply=Boolean(body.autoReply);
+      if(body.readerIncludeName !== undefined) youtubeState.readerIncludeName=Boolean(body.readerIncludeName);
+      if(body.awayMode !== undefined) youtubeState.awayMode=Boolean(body.awayMode);
+      return json(res,200,{ok:true,...youtubeSnapshot()});
+    } catch(e) {return json(res,400,{ok:false,error:String(e?.message||e)});}
+  }
+  if (req.method === 'POST' && u.pathname === '/api/youtube/comment/test') {
+    if (!isControllerAuthorized(req)) return json(res,401,{ok:false,error:'unauthorized'});
+    try {
+      const body=await readJson(req);
+      const comment=String(body.comment||'Verity, ¿cómo va el directo?').slice(0,220);
+      await processYoutubeComment({username:'youtube-test',displayName:String(body.displayName||'Prueba YouTube').slice(0,60),comment});
+      return json(res,200,{ok:true,...youtubeSnapshot()});
+    }catch(e){return json(res,400,{ok:false,error:String(e?.message||e)});}
   }
 
   if (req.method === 'GET' && u.pathname === '/api/tiktok/status') {
