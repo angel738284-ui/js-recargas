@@ -287,7 +287,7 @@ router.get('/friends/lookup/:code',auth,run(async(req,res)=>{
  res.json({user:{id,name:q.rows[0].display_name,avatar:q.rows[0].settings?.avatar||'🎮',friendCode:code},relation});
 }));
 router.get('/friends',auth,run(async(req,res)=>{
- const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings,f.intro_message
+ const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.username,a.bio,a.settings,f.intro_message
  FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=
  CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
  WHERE (f.sender=$1 OR f.recipient=$1) AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b
@@ -302,7 +302,7 @@ router.get('/friends',auth,run(async(req,res)=>{
 router.get('/friends/:id/profile',auth,run(async(req,res)=>{
  if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Perfil inválido'});
  const q=await pool.query(`SELECT a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,
-   a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings
+   a.banner IS NOT NULL AS has_banner,a.friend_code,a.username,a.bio,a.settings
    FROM jsvoice.accounts a WHERE a.id=$1 AND EXISTS(
    SELECT 1 FROM jsvoice.friendships f WHERE f.status='accepted' AND
    ((f.sender=$2 AND f.recipient=a.id) OR (f.recipient=$2 AND f.sender=a.id)))
