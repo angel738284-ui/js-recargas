@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS jsvoice.accounts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS banner BYTEA;
+ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS username VARCHAR(22);
+UPDATE jsvoice.accounts SET username='js_'||lower(friend_code) WHERE username IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS jsvoice_account_username_unique ON jsvoice.accounts(lower(username));
 CREATE TABLE IF NOT EXISTS jsvoice.presence (
   account_id UUID PRIMARY KEY REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -74,9 +77,19 @@ async function ensureDatabase(){
 const safeName=s=>String(s||'').trim().replace(/[<>\\\u0000-\u001f]/g,'').slice(0,32);
 const AVATARS = new Set(['🎮','🥷','🔥','💎','🐉','🐺','🎧','🌸','👑','🦊','⚡','🐼','🦅','💜']);
 const code=()=>randomBytes(6).toString('hex').slice(0,10).toUpperCase();
+const validUsername=s=>/^[a-z][a-z0-9_]{2,19}$/.test(s);
+const reserved=new Set(['admin','administrador','support','soporte','jsvoice','js_voice','official','oficial','moderator','mod','system','sistema','staff','help','ayuda']);
+const searchCounts=new Map();
+function searchLimit(account){
+ const now=Date.now(),old=searchCounts.get(account);
+ const val=old&&now-old.start<60000?old:{start:now,count:0};
+ val.count++;searchCounts.set(account,val);
+ if(searchCounts.size>3000)for(const [k,v] of searchCounts)if(now-v.start>60000)searchCounts.delete(k);
+ return val.count<=20;
+}
 const hash=t=>createHash('sha256').update(t).digest('hex');
 const portrait=a=>a.photo?'/api/account/accounts/'+a.id+'/photo':a.google_photo;
-const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),banner:(a.banner||a.has_banner)?'/api/account/accounts/'+a.id+'/banner':null,bio:a.bio,friendCode:a.friend_code});
+const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),banner:(a.banner||a.has_banner)?'/api/account/accounts/'+a.id+'/banner':null,bio:a.bio,friendCode:a.friend_code,username:a.username||('js_'+String(a.friend_code||'').toLowerCase())});
 const selfAccount=a=>({...publicAccount(a),email:a.email,preferences:a.settings||{}});
 const fail=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Error del servidor'});
 const run=fn=>async(req,res)=>{try{await fn(req,res)}catch(e){console.error('Cuentas JS VOICE:',e.message);fail(res,e)}};
@@ -124,8 +137,8 @@ router.post('/google',run(async(req,res)=>{
   const photo=typeof payload.picture==='string'&&payload.picture.startsWith('https://')?payload.picture:null;
   const newId=randomUUID();
   const inserted=await pool.query(`INSERT INTO jsvoice.accounts
-    (id,google_sub,display_name,google_name,email,google_photo,friend_code)
-    VALUES($1,$2,$3,$3,$4,$5,$6)
+    (id,google_sub,display_name,google_name,email,google_photo,friend_code,username)
+    VALUES($1,$2,$3,$3,$4,$5,$6,'js_'||lower($6))
     ON CONFLICT(google_sub) DO UPDATE SET google_name=EXCLUDED.google_name,
     email=EXCLUDED.email,google_photo=EXCLUDED.google_photo,updated_at=now()
     RETURNING *`,[newId,payload.sub,display,payload.email,photo,code()]);
@@ -165,6 +178,18 @@ router.post('/push/register',auth,run(async(req,res)=>{
 router.post('/push/unregister',auth,run(async(req,res)=>{
  await unregisterPushDevice(req.account.id,req.body?.token);
  res.json({ok:true});
+}));
+router.patch('/me/username',auth,run(async(req,res)=>{
+ const username=String(req.body?.username||'').trim().replace(/^@/,'').toLowerCase();
+ if(!validUsername(username)||reserved.has(username))
+  return res.status(400).json({error:'Elegí un usuario de 3 a 20 caracteres: letras, números o guion bajo. Debe empezar con una letra.'});
+ try{
+  const q=await pool.query('UPDATE jsvoice.accounts SET username=$2,updated_at=now() WHERE id=$1 RETURNING *',[req.account.id,username]);
+  res.json({profile:selfAccount(q.rows[0])});
+ }catch(e){
+  if(e.code==='23505')return res.status(409).json({error:'Ese @usuario ya está ocupado. Elegí otro.'});
+  throw e;
+ }
 }));
 router.patch('/me',auth,run(async(req,res)=>{
  const name=safeName(req.body?.name);
@@ -226,6 +251,28 @@ router.get('/accounts/:id/photo',run(async(req,res)=>{
  if(!result.rowCount||!result.rows[0].photo)return res.sendStatus(404);
  res.set('Cache-Control','no-cache');
  res.type('jpeg').send(result.rows[0].photo);
+}));
+router.get('/friends/search',auth,run(async(req,res)=>{
+ if(!searchLimit(req.account.id))return res.status(429).json({error:'Demasiadas búsquedas. Probá de nuevo en un minuto.'});
+ const raw=String(req.query.q||'').trim().replace(/^@/,'').slice(0,30);
+ if(raw.length<2)return res.status(400).json({error:'Escribí al menos dos letras'});
+ const term=raw.toLowerCase().replace(/[\\%_]/g,'\\$&');
+ const q=await pool.query(`SELECT a.id,a.display_name,a.username,a.friend_code,a.settings,a.google_photo,a.photo IS NOT NULL AS has_photo,
+ f.sender AS friend_sender,f.status AS friend_status
+ FROM jsvoice.accounts a
+ LEFT JOIN jsvoice.friendships f ON ((f.sender=$1 AND f.recipient=a.id) OR (f.recipient=$1 AND f.sender=a.id))
+ WHERE a.id<>$1 AND
+ (lower(a.username) LIKE $2 ESCAPE '\\' OR lower(a.display_name) LIKE $2 ESCAPE '\\')
+ AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b
+ WHERE (b.blocker=$1 AND b.blocked=a.id) OR (b.blocked=$1 AND b.blocker=a.id))
+ ORDER BY CASE WHEN lower(a.username)=lower($3) THEN 0 WHEN lower(a.username) LIKE $2 ESCAPE '\\' THEN 1 ELSE 2 END,
+ a.display_name ASC LIMIT 12`,[req.account.id,term+'%',raw]);
+ res.set('Cache-Control','private, no-store');
+ res.json({results:q.rows.map(a=>({
+  id:a.id,name:a.display_name,username:a.username,friendCode:a.friend_code,
+  avatar:a.settings?.avatar||'🎮',photo:a.has_photo?'/api/account/accounts/'+a.id+'/photo':a.google_photo,
+  relation:!a.friend_status?'none':a.friend_status==='accepted'?'friends':a.friend_status==='rejected'?'rejected':a.friend_sender===req.account.id?'sent':'received'
+ }))});
 }));
 router.get('/friends/lookup/:code',auth,run(async(req,res)=>{
  const code=String(req.params.code||'').trim().toUpperCase();
