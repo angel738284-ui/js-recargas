@@ -3,6 +3,7 @@ import {randomBytes,createHash,randomUUID} from 'node:crypto';
 import {OAuth2Client} from 'google-auth-library';
 import pg from 'pg';
 import {registerPushDevice,unregisterPushDevice,pushReady,sendPushToAccount} from './push.js';
+import {isPaused,setPaused} from './maintenance.js';
 
 const clients = new OAuth2Client();
 const clientId = process.env.GOOGLE_WEB_CLIENT_ID || '';
@@ -26,6 +27,12 @@ CREATE TABLE IF NOT EXISTS jsvoice.accounts (
 );
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS banner BYTEA;
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS username VARCHAR(22);
+ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS jsvoice.admin_audit(
+ id BIGSERIAL PRIMARY KEY, actor_id UUID NOT NULL,
+ action VARCHAR(48) NOT NULL, target_id UUID, target_name TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS jsvoice.app_badges(
  account_id UUID PRIMARY KEY REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
  kind VARCHAR(16) NOT NULL CHECK(kind IN ('ADM')),
@@ -136,6 +143,7 @@ async function auth(req,res,next){
       WHERE s.session_hash=$1 AND s.expires_at>now()`,[hash(match[1])]);
     if(!result.rowCount)return res.status(401).json({error:'Sesión vencida. Entrá con Google de nuevo'});
     req.account=result.rows[0];
+    if(req.account.suspended===true)return res.status(403).json({error:'Cuenta suspendida por administración de JS VOICE'});
     next();
   }catch(e){fail(res,e)}
 }
@@ -158,10 +166,77 @@ router.post('/google',run(async(req,res)=>{
     email=EXCLUDED.email,google_photo=EXCLUDED.google_photo,updated_at=now()
     RETURNING *`,[newId,payload.sub,display,payload.email,photo,code()]);
   const person=inserted.rows[0];
+  if(person.suspended===true)return res.status(403).json({error:'Esta cuenta está suspendida. Contactá al administrador.'});
   const session=randomBytes(48).toString('base64url');
   await pool.query('INSERT INTO jsvoice.sessions(session_hash,account_id,expires_at) VALUES($1,$2,now()+interval \'30 days\')',[hash(session),person.id]);
   await pool.query('DELETE FROM jsvoice.sessions WHERE expires_at<now()');
   res.json({session,profile:selfAccount(person)});
+}));
+// Every admin operation is authorized using an immutable server-side account id.
+// A username, email or client-supplied isAdmin flag NEVER grants privileges.
+function adminOnly(req,res,next){
+ if(!verifiedAdminId||req.account?.id!==verifiedAdminId)return res.status(403).json({error:'Acceso reservado al administrador verificado'});
+ next();
+}
+router.get('/admin/status',auth,adminOnly,run(async(req,res)=>{
+ res.set('Cache-Control','no-store');
+ res.json({paused:await isPaused(true),admin:true});
+}));
+router.post('/admin/maintenance',auth,adminOnly,run(async(req,res)=>{
+ if(typeof req.body?.paused!=='boolean'||req.body?.confirm!=='JS VOICE')
+  return res.status(400).json({error:'Confirmación de administrador incorrecta'});
+ const paused=await setPaused(req.body.paused,req.account.id);
+ await pool.query('INSERT INTO jsvoice.admin_audit(actor_id,action) VALUES($1,$2)',[req.account.id,paused?'pause_service':'resume_service']);
+ res.json({ok:true,paused});
+}));
+router.get('/admin/accounts',auth,adminOnly,run(async(req,res)=>{
+ if(!searchLimit('adm:'+req.account.id))return res.status(429).json({error:'Demasiadas búsquedas'});
+ const raw=String(req.query.q||'').trim().replace(/^@/,'').toLowerCase();
+ if(raw.length<2||raw.length>40)return res.status(400).json({error:'Ingresá de 2 a 40 caracteres'});
+ const escaped=raw.replace(/[\\%_]/g,'\\$&');
+ const result=await pool.query(`SELECT id,username,display_name,suspended
+ FROM jsvoice.accounts WHERE (lower(username) LIKE $1 ESCAPE '\\' OR lower(display_name) LIKE $1 ESCAPE '\\')
+ ORDER BY CASE WHEN lower(username)=$2 THEN 0 ELSE 1 END,created_at DESC LIMIT 20`,['%'+escaped+'%',raw]);
+ res.set('Cache-Control','private,no-store');
+ res.json({accounts:result.rows.map(a=>({id:a.id,username:a.username,name:a.display_name,
+ suspended:a.suspended,isAdmin:a.id===verifiedAdminId}))});
+}));
+router.post('/admin/accounts/:id/suspend',auth,adminOnly,run(async(req,res)=>{
+ const id=req.params.id;
+ if(!validId(id)||id===verifiedAdminId)return res.status(403).json({error:'No se puede suspender esta cuenta'});
+ if(typeof req.body?.suspended!=='boolean')return res.status(400).json({error:'Estado inválido'});
+ const q=await pool.query('UPDATE jsvoice.accounts SET suspended=$2,updated_at=now() WHERE id=$1 RETURNING username',[id,req.body.suspended]);
+ if(!q.rowCount)return res.status(404).json({error:'Cuenta no encontrada'});
+ if(req.body.suspended){
+  await pool.query('DELETE FROM jsvoice.sessions WHERE account_id=$1',[id]);
+  await pool.query(`UPDATE jsvoice.direct_calls SET status='ended',responded_at=now()
+   WHERE status IN ('ringing','accepted') AND (caller=$1 OR recipient=$1)`,[id]);
+ }
+ await pool.query('INSERT INTO jsvoice.admin_audit(actor_id,action,target_id,target_name) VALUES($1,$2,$3,$4)',
+ [req.account.id,req.body.suspended?'suspend_account':'reactivate_account',id,q.rows[0].username]);
+ res.json({ok:true,suspended:req.body.suspended});
+}));
+router.post('/admin/accounts/:id/delete',auth,adminOnly,run(async(req,res)=>{
+ const id=req.params.id;
+ if(!validId(id)||id===verifiedAdminId)return res.status(403).json({error:'No podés eliminar la cuenta ADM'});
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const q=await client.query('SELECT id,username,display_name FROM jsvoice.accounts WHERE id=$1 FOR UPDATE',[id]);
+  if(!q.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Cuenta inexistente'})}
+  const target=q.rows[0],mustType='ELIMINAR @'+target.username;
+  if(req.body?.confirm!==mustType){
+   await client.query('ROLLBACK');
+   return res.status(400).json({error:'Escribí exactamente '+mustType});
+  }
+  await client.query(`DELETE FROM jsvoice.direct_calls WHERE caller=$1 OR recipient=$1`,[id]);
+  await client.query('DELETE FROM jsvoice.accounts WHERE id=$1',[id]);
+  await client.query('INSERT INTO jsvoice.admin_audit(actor_id,action,target_id,target_name) VALUES($1,$2,$3,$4)',
+    [req.account.id,'delete_account',id,'@'+target.username+' / '+target.display_name]);
+  await client.query('COMMIT');
+  res.json({ok:true,deleted:true});
+ }catch(e){try{await client.query('ROLLBACK')}catch{}throw e}
+ finally{client.release()}
 }));
 router.get('/me',auth,run(async(req,res)=>res.json({profile:selfAccount(req.account)})));
 router.get('/push/status',auth,run(async(req,res)=>{

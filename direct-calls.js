@@ -19,7 +19,9 @@ export function configureDirectRooms(create){roomCreator=create}
 const tokenHash=t=>createHash('sha256').update(t).digest('hex');
 async function accountBySession(session){
  if(!pool||typeof session!=='string'||!/^[A-Za-z0-9_-]{43,128}$/.test(session))return null;
- const r=await pool.query('SELECT account_id FROM jsvoice.sessions WHERE session_hash=$1 AND expires_at>now()',[tokenHash(session)]);
+ const r=await pool.query(`SELECT s.account_id FROM jsvoice.sessions s
+ JOIN jsvoice.accounts a ON a.id=s.account_id
+ WHERE s.session_hash=$1 AND s.expires_at>now() AND a.suspended=false`,[tokenHash(session)]);
  return r.rows[0]?.account_id||null;
 }
 export async function directRoomAllowed(room,session){

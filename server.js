@@ -9,6 +9,7 @@ import { Server as SocketServer } from 'socket.io';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import accountRouter from './accounts.js';
 import directCallRouter,{configureDirectRooms,directRoomAllowed} from './direct-calls.js';
+import {isPaused,registerPauseHandler} from './maintenance.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const app = express(), httpServer = http.createServer(app);
@@ -42,6 +43,17 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(compression({threshold:1024}));
 app.use(express.json({limit:'14kb'}));
+// Emergency pause blocks all application actions except login/recovery,
+// version status, and server-verified administration.
+app.use(async(req,res,next)=>{
+ const p=req.path;
+ const recovery=p==='/api/account/config'||p==='/api/account/google'||
+  (p==='/api/account/me'&&req.method==='GET')||p.startsWith('/api/account/admin/')||
+  p==='/api/app/version'||p==='/health';
+ if(recovery)return next();
+ if(await isPaused())return res.status(503).json({error:'JS VOICE está temporalmente suspendida por administración'});
+ next();
+});
 app.use('/api/account',accountRouter);
 app.use('/api/direct',directCallRouter);
 app.get('/.well-known/assetlinks.json',(_req,res)=>{
@@ -170,8 +182,21 @@ async function admit(r,s,name,host=false,avatar='🎮',textOnly=false){
     publish(r);
   }catch(e){console.error('LiveKit:',e?.message);s.emit('join-error','No se pudo conectar al servidor de voz');}
 }
+io.use(async(_socket,next)=>{
+ try{next(await isPaused()?new Error('JS VOICE está en pausa administrativa'):undefined)}
+ catch(e){next(e)}
+});
+registerPauseHandler(async()=>{
+ io.emit('service-maintenance',{message:'JS VOICE está en mantenimiento'});
+ io.disconnectSockets(true);
+ const active=[...rooms.values()];
+ rooms.clear();
+ if(voice)await Promise.allSettled(active.filter(r=>r.prepared)
+  .map(r=>voice.deleteRoom('jsvoice-'+r.id)));
+});
 io.on('connection',s=>{
   s.on('join-room',async({roomId,name,hostKey,password,avatar,accountSession,textOnly}={})=>{
+    if(await isPaused())return s.emit('join-error','JS VOICE está en pausa administrativa');
     if(s.data.room)return s.emit('join-error','Ya estás en una sala');
     const r=rooms.get(String(roomId||''));
     if(!r)return s.emit('join-error','La sala ya no existe');
