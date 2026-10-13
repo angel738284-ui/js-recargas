@@ -10,6 +10,10 @@ const pool=connection?new pg.Pool({connectionString:connection,max:2,
   connectionTimeoutMillis:7000,idleTimeoutMillis:20000,
   ssl:connection.includes('localhost')?undefined:{rejectUnauthorized:false}}):null;
 const router=Router();
+async function isBlocked(a,b){
+ const x=await pool.query('SELECT 1 FROM jsvoice.blocks WHERE (blocker=$1 AND blocked=$2) OR (blocker=$2 AND blocked=$1) LIMIT 1',[a,b]);
+ return x.rowCount>0;
+}
 let roomCreator=null;
 export function configureDirectRooms(create){roomCreator=create}
 const tokenHash=t=>createHash('sha256').update(t).digest('hex');
@@ -25,6 +29,7 @@ export async function directRoomAllowed(room,session){
  WHERE room_id=$1 ORDER BY created_at DESC LIMIT 1`,[room.id]);
  if(!q.rowCount)return false;
  const c=q.rows[0];
+ if(await isBlocked(c.caller,c.recipient))return false;
  return c.status==='accepted' && (c.caller===id||c.recipient===id) ||
   c.status==='ringing' && c.caller===id && new Date(c.expires_at)>new Date();
 }
@@ -48,7 +53,9 @@ router.get('/calls',auth,wrap(async(req,res)=>{
  a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.google_photo,a.friend_code
  FROM jsvoice.direct_calls c
  JOIN jsvoice.accounts a ON a.id=CASE WHEN c.caller=$1 THEN c.recipient ELSE c.caller END
- WHERE (c.recipient=$1 OR c.caller=$1) AND c.created_at>now()-interval '2 hours'
+  WHERE (c.recipient=$1 OR c.caller=$1) AND c.created_at>now()-interval '2 hours'
+  AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b WHERE (b.blocker=c.caller AND b.blocked=c.recipient)
+  OR (b.blocker=c.recipient AND b.blocked=c.caller))
  ORDER BY c.created_at DESC LIMIT 40`,[req.accountId]);
  res.set('Cache-Control','no-store');
  res.json({incoming:q.rows.filter(x=>x.recipient===req.accountId).map(view),
@@ -61,6 +68,10 @@ router.post('/calls',auth,wrap(async(req,res)=>{
  const a=await pool.query('SELECT id,display_name FROM jsvoice.accounts WHERE friend_code=$1',[friendCode]);
  if(!a.rowCount)return res.status(404).json({error:'No encontramos esa cuenta'});
  const other=a.rows[0];if(other.id===req.accountId)return res.status(400).json({error:'No podés llamarte a vos mismo'});
+ if(await isBlocked(req.accountId,other.id))return res.status(403).json({error:'No se puede llamar a esta persona'});
+ const friendship=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted' AND
+ ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,[req.accountId,other.id]);
+ if(!friendship.rowCount)return res.status(403).json({error:'Solo podés llamar a tus amigos'});
  const q=await pool.query(`SELECT
  COUNT(*) FILTER(WHERE created_at>now()-interval '1 minute')::int AS recent,
  COUNT(*) FILTER(WHERE created_at>now()-interval '1 day')::int AS daily,
@@ -84,6 +95,9 @@ router.post('/calls',auth,wrap(async(req,res)=>{
 router.post('/calls/:id/respond',auth,wrap(async(req,res)=>{
  if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(404).json({error:'No encontramos la llamada'});
  if(typeof req.body?.accept!=='boolean')return res.status(400).json({error:'Elegí aceptar o rechazar'});
+ const callPair=await pool.query('SELECT caller,recipient FROM jsvoice.direct_calls WHERE id=$1',[req.params.id]);
+ if(callPair.rowCount && await isBlocked(callPair.rows[0].caller,callPair.rows[0].recipient))
+  return res.status(403).json({error:'Contacto bloqueado'});
  const status=req.body.accept?'accepted':'declined';
  const q=await pool.query(`UPDATE jsvoice.direct_calls SET status=$3,responded_at=now()
  WHERE id=$1 AND recipient=$2 AND status='ringing' AND expires_at>now()

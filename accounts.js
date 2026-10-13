@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS jsvoice.direct_messages(
 );
 CREATE INDEX IF NOT EXISTS jsvoice_dm_sent ON jsvoice.direct_messages(sender,recipient,created_at DESC);
 CREATE INDEX IF NOT EXISTS jsvoice_dm_received ON jsvoice.direct_messages(recipient,created_at DESC);
+CREATE TABLE IF NOT EXISTS jsvoice.blocks(
+ blocker UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+ blocked UUID NOT NULL REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(blocker,blocked),CHECK(blocker<>blocked)
+);
+CREATE INDEX IF NOT EXISTS jsvoice_blocks_blocked ON jsvoice.blocks(blocked);
+ALTER TABLE jsvoice.direct_messages ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'text';
+ALTER TABLE jsvoice.direct_messages ADD COLUMN IF NOT EXISTS media BYTEA;
+ALTER TABLE jsvoice.direct_messages ADD COLUMN IF NOT EXISTS mime VARCHAR(35);
+ALTER TABLE jsvoice.direct_messages ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 0;
 `;
 let initialized=false;
 async function ensureDatabase(){
@@ -69,6 +80,23 @@ const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||
 const selfAccount=a=>({...publicAccount(a),email:a.email,preferences:a.settings||{}});
 const fail=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Error del servidor'});
 const run=fn=>async(req,res)=>{try{await fn(req,res)}catch(e){console.error('Cuentas JS VOICE:',e.message);fail(res,e)}};
+const validId=id=>/^[0-9a-f-]{36}$/i.test(String(id||''));
+async function blocked(a,b){
+ const q=await pool.query('SELECT 1 FROM jsvoice.blocks WHERE (blocker=$1 AND blocked=$2) OR (blocker=$2 AND blocked=$1) LIMIT 1',[a,b]);
+ return q.rowCount>0;
+}
+async function friendAllowed(a,b){
+ if(!validId(b) || a===b || await blocked(a,b))return false;
+ const q=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted'
+ AND ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,[a,b]);
+ return q.rowCount>0;
+}
+const STICKERS=new Set(['😀','😂','🤣','🥹','😍','😎','😭','😡','😱','🥳','❤️','🔥','💜','👍','👀','💀','🐸','🐱','🐼','🎮','💎','🍕','🌹','⭐','👑','🥷']);
+async function messageQuota(id){
+ const recent=await pool.query(`SELECT count(*)::int n FROM jsvoice.direct_messages WHERE sender=$1
+ AND created_at>now()-interval '1 minute'`,[id]);
+ return recent.rows[0].n<25;
+}
 router.get('/config',(_req,res)=>res.json({googleEnabled:Boolean(clientId&&pool),clientId:clientId||null,accountsEnabled:Boolean(pool)}));
 async function auth(req,res,next){
   try{
@@ -125,6 +153,7 @@ router.get('/presence/friends',auth,run(async(req,res)=>{
   JOIN jsvoice.accounts a ON a.id=CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
   LEFT JOIN jsvoice.presence p ON p.account_id=a.id
   WHERE f.status='accepted' AND (f.sender=$1 OR f.recipient=$1)
+  AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b WHERE (b.blocker=$1 AND b.blocked=a.id) OR (b.blocked=$1 AND b.blocker=a.id))
   LIMIT 150`,[req.account.id]);
  res.set('Cache-Control','no-store');
  res.json({friends:q.rows});
@@ -203,6 +232,7 @@ router.get('/friends/lookup/:code',auth,run(async(req,res)=>{
  if(!/^[A-F0-9]{10}$/.test(code))return res.status(400).json({error:'El código debe tener 10 caracteres'});
  const q=await pool.query('SELECT id,display_name,friend_code,settings FROM jsvoice.accounts WHERE friend_code=$1',[code]);
  if(!q.rowCount||q.rows[0].id===req.account.id)return res.status(404).json({error:'No encontramos ese usuario'});
+ if(await blocked(req.account.id,q.rows[0].id))return res.status(403).json({error:'Usuario no disponible'});
  const id=q.rows[0].id;
  const fs=await pool.query('SELECT sender,recipient,status FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)',[req.account.id,id]);
  const f=fs.rows[0];
@@ -213,7 +243,9 @@ router.get('/friends',auth,run(async(req,res)=>{
  const q=await pool.query(`SELECT f.sender,f.recipient,f.status,a.id,a.display_name,a.google_photo,a.photo IS NOT NULL AS has_photo,a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings,f.intro_message
  FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=
  CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
- WHERE f.sender=$1 OR f.recipient=$1 ORDER BY f.created_at DESC LIMIT 150`,[req.account.id]);
+ WHERE (f.sender=$1 OR f.recipient=$1) AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b
+ WHERE (b.blocker=$1 AND b.blocked=a.id) OR (b.blocked=$1 AND b.blocker=a.id))
+ ORDER BY f.created_at DESC LIMIT 150`,[req.account.id]);
  res.json({friends:q.rows.filter(x=>x.status==='accepted').map(x=>publicAccount({...x,photo:x.has_photo?true:null})),
  requests:q.rows.filter(x=>x.status==='pending'&&x.recipient===req.account.id)
  .map(x=>({...publicAccount({...x,photo:x.has_photo?true:null}),introMessage:x.intro_message||''})),
@@ -226,7 +258,9 @@ router.get('/friends/:id/profile',auth,run(async(req,res)=>{
    a.banner IS NOT NULL AS has_banner,a.friend_code,a.bio,a.settings
    FROM jsvoice.accounts a WHERE a.id=$1 AND EXISTS(
    SELECT 1 FROM jsvoice.friendships f WHERE f.status='accepted' AND
-   ((f.sender=$2 AND f.recipient=a.id) OR (f.recipient=$2 AND f.sender=a.id)))`,
+   ((f.sender=$2 AND f.recipient=a.id) OR (f.recipient=$2 AND f.sender=a.id)))
+   AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b
+   WHERE (b.blocker=$2 AND b.blocked=a.id) OR (b.blocked=$2 AND b.blocker=a.id))`,
    [req.params.id,req.account.id]);
  if(!q.rowCount)return res.status(404).json({error:'Este perfil no está en tu lista de amigos'});
  res.json({profile:publicAccount({...q.rows[0],photo:q.rows[0].has_photo?true:null})});
@@ -240,6 +274,7 @@ router.post('/friends/request',auth,run(async(req,res)=>{
  const q=await pool.query('SELECT id FROM jsvoice.accounts WHERE friend_code=$1',[friendCode]);
  if(!q.rowCount||q.rows[0].id===req.account.id)return res.status(404).json({error:'No encontramos ese usuario'});
  const other=q.rows[0].id;
+ if(await blocked(req.account.id,other))return res.status(403).json({error:'No podés enviarle una solicitud a esta persona'});
  const client=await pool.connect();
  try{
   await client.query('BEGIN');
@@ -277,6 +312,7 @@ router.post('/friends/:id/accept',auth,run(async(req,res)=>{
  const q=await pool.query(`UPDATE jsvoice.friendships SET status='accepted'
  WHERE sender=$1 AND recipient=$2 AND status='pending' RETURNING sender`,[req.params.id,req.account.id]);
  if(!q.rowCount)return res.sendStatus(404);
+ if(await blocked(req.account.id,req.params.id)){await pool.query("DELETE FROM jsvoice.friendships WHERE sender=$1 AND recipient=$2",[req.params.id,req.account.id]);return res.status(403).json({error:'Usuario bloqueado'})}
  await sendPushToAccount(req.params.id,{type:'friend',title:'Solicitud aceptada',
    body:req.account.display_name+' aceptó tu solicitud de amistad',otherId:req.account.id});
  res.json({ok:true});
@@ -294,40 +330,86 @@ router.get('/messages/conversations',auth,run(async(req,res)=>{
   (SELECT count(*)::int FROM jsvoice.direct_messages m WHERE m.sender=a.id AND m.recipient=$1 AND m.read_at IS NULL) AS unread
   FROM jsvoice.friendships f JOIN jsvoice.accounts a ON a.id=CASE WHEN f.sender=$1 THEN f.recipient ELSE f.sender END
   WHERE f.status='accepted' AND (f.sender=$1 OR f.recipient=$1)
+  AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b WHERE (b.blocker=$1 AND b.blocked=a.id) OR (b.blocked=$1 AND b.blocker=a.id))
   ORDER BY a.display_name LIMIT 150`,[req.account.id]);
  res.json({conversations:q.rows.map(x=>({id:x.id,name:x.display_name,friendCode:x.friend_code,
  avatar:x.settings?.avatar||'🎮',lastMessage:x.last_message||'',unread:x.unread}))});
 }));
 router.get('/messages/:id',auth,run(async(req,res)=>{
- if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Usuario inválido'});
- const allowed=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted'
-   AND ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,
- [req.account.id,req.params.id]);
- if(!allowed.rowCount)return res.status(403).json({error:'Solo podés chatear con tus amigos'});
- const q=await pool.query(`SELECT * FROM (SELECT id,sender,recipient,body,created_at
+ if(!await friendAllowed(req.account.id,req.params.id))return res.status(403).json({error:'Chat no disponible'});
+ const q=await pool.query(`SELECT * FROM (SELECT id,sender,recipient,body,kind,mime,duration_seconds,created_at
    FROM jsvoice.direct_messages WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)
-   ORDER BY created_at DESC LIMIT 100) v ORDER BY created_at ASC`,
- [req.account.id,req.params.id]);
- await pool.query('UPDATE jsvoice.direct_messages SET read_at=now() WHERE recipient=$1 AND sender=$2 AND read_at IS NULL',
- [req.account.id,req.params.id]);
- res.json({messages:q.rows.map(x=>({id:x.id,mine:x.sender===req.account.id,body:x.body,createdAt:x.created_at}))});
+   ORDER BY created_at DESC LIMIT 100) v ORDER BY created_at ASC`,[req.account.id,req.params.id]);
+ await pool.query('UPDATE jsvoice.direct_messages SET read_at=now() WHERE recipient=$1 AND sender=$2 AND read_at IS NULL',[req.account.id,req.params.id]);
+ res.json({messages:q.rows.map(x=>({id:x.id,mine:x.sender===req.account.id,body:x.body,
+   kind:x.kind||'text',mime:x.mime,durationSeconds:x.duration_seconds||0,createdAt:x.created_at}))});
 }));
 router.post('/messages/:id',auth,run(async(req,res)=>{
- if(!/^[0-9a-f-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Usuario inválido'});
+ if(!await friendAllowed(req.account.id,req.params.id))return res.status(403).json({error:'Solo podés escribirle a tus amigos no bloqueados'});
+ const kind=req.body?.kind==='sticker'?'sticker':'text';
  const body=typeof req.body?.body==='string'?req.body.body.trim():'';
- if(!body||body.length>1000)return res.status(400).json({error:'El mensaje debe tener entre 1 y 1000 caracteres'});
- const allowed=await pool.query(`SELECT 1 FROM jsvoice.friendships WHERE status='accepted'
-   AND ((sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)) LIMIT 1`,
- [req.account.id,req.params.id]);
- if(!allowed.rowCount)return res.status(403).json({error:'Solo podés enviar mensajes a tus amigos'});
- const recent=await pool.query(`SELECT count(*)::int n FROM jsvoice.direct_messages WHERE sender=$1
-  AND created_at>now()-interval '1 minute'`,[req.account.id]);
- if(recent.rows[0].n>=25)return res.status(429).json({error:'Demasiados mensajes. Esperá un momento'});
- const q=await pool.query('INSERT INTO jsvoice.direct_messages(id,sender,recipient,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',
- [randomUUID(),req.account.id,req.params.id,body]);
+ if(kind==='sticker'?!STICKERS.has(body):(!body||body.length>1000))return res.status(400).json({error:'Contenido del mensaje inválido'});
+ if(!await messageQuota(req.account.id))return res.status(429).json({error:'Demasiados mensajes. Esperá un momento'});
+ const q=await pool.query('INSERT INTO jsvoice.direct_messages(id,sender,recipient,body,kind) VALUES($1,$2,$3,$4,$5) RETURNING id,created_at',
+ [randomUUID(),req.account.id,req.params.id,body,kind]);
  await sendPushToAccount(req.params.id,{type:'message',title:'Mensaje de '+req.account.display_name,
-   body:body.slice(0,140),otherId:req.account.id});
+   body:kind==='sticker'?'Te envió un sticker':body.slice(0,140),otherId:req.account.id});
  res.status(201).json({ok:true,id:q.rows[0].id,createdAt:q.rows[0].created_at});
+}));
+router.post('/messages/:id/media',auth,async(req,res)=>{
+ try{
+ if(!await friendAllowed(req.account.id,req.params.id))return res.status(403).json({error:'Solo podés mandar archivos a tus amigos'});
+ const type=req.get('content-type')||'';
+ const kind=type==='image/jpeg'?'image':type==='audio/mp4'?'audio':null;
+ if(!kind)return res.status(415).json({error:'Solo se admiten fotos JPEG y audios M4A'});
+ const limit=kind==='image'?450000:1500000;
+ const size=Number(req.get('content-length')||0);
+ if(size>limit)return res.status(413).json({error:'Archivo demasiado grande'});
+ const parts=[];let length=0;
+ for await(const part of req){length+=part.length;if(length>limit)return res.status(413).json({error:'Archivo demasiado grande'});parts.push(part)}
+ const raw=Buffer.concat(parts);
+ if(raw.length<64)return res.status(400).json({error:'Archivo vacío'});
+ if(kind==='image' && !(raw[0]===255&&raw[1]===216&&raw.at(-2)===255&&raw.at(-1)===217))
+  return res.status(400).json({error:'Foto JPEG inválida'});
+ if(kind==='audio' && raw.subarray(4,8).toString()!=='ftyp')
+  return res.status(400).json({error:'Audio M4A inválido'});
+ if(!await messageQuota(req.account.id))return res.status(429).json({error:'Demasiados mensajes'});
+ const duration=Math.max(0,Math.min(90,parseInt(req.get('x-audio-duration')||'0')||0));
+ const id=randomUUID();
+ await pool.query('INSERT INTO jsvoice.direct_messages(id,sender,recipient,body,kind,media,mime,duration_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+ [id,req.account.id,req.params.id,kind==='image'?'📷 Foto':'🎤 Audio',kind,raw,type,kind==='audio'?duration:0]);
+ await sendPushToAccount(req.params.id,{type:'message',title:'Mensaje de '+req.account.display_name,body:kind==='image'?'📷 Te envió una foto':'🎤 Te envió un audio',otherId:req.account.id});
+ res.status(201).json({ok:true,id,kind});
+ }catch(e){fail(res,e)}
+});
+router.get('/messages/media/:id',auth,run(async(req,res)=>{
+ if(!validId(req.params.id))return res.sendStatus(404);
+ const q=await pool.query('SELECT sender,recipient,media,mime FROM jsvoice.direct_messages WHERE id=$1',[req.params.id]);
+ if(!q.rowCount||!q.rows[0].media)return res.sendStatus(404);
+ const item=q.rows[0];
+ if(req.account.id!==item.sender&&req.account.id!==item.recipient)return res.sendStatus(403);
+ if(!await friendAllowed(item.sender,item.recipient))return res.sendStatus(403);
+ res.set('Cache-Control','private, no-store').set('X-Content-Type-Options','nosniff');
+ res.type(item.mime).send(item.media);
+}));
+router.get('/blocks',auth,run(async(req,res)=>{
+ const q=await pool.query(`SELECT a.id,a.display_name,a.settings,a.friend_code FROM jsvoice.blocks b
+ JOIN jsvoice.accounts a ON a.id=b.blocked WHERE b.blocker=$1 ORDER BY b.created_at DESC LIMIT 200`,[req.account.id]);
+ res.json({blocked:q.rows.map(a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',friendCode:a.friend_code}))});
+}));
+router.post('/blocks/:id',auth,run(async(req,res)=>{
+ if(!validId(req.params.id)||req.params.id===req.account.id)return res.status(400).json({error:'Usuario inválido'});
+ const found=await pool.query('SELECT 1 FROM jsvoice.accounts WHERE id=$1',[req.params.id]);if(!found.rowCount)return res.sendStatus(404);
+ await pool.query('INSERT INTO jsvoice.blocks(blocker,blocked) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.account.id,req.params.id]);
+ await pool.query('DELETE FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)',[req.account.id,req.params.id]);
+ await pool.query(`UPDATE jsvoice.direct_calls SET status='ended',responded_at=now()
+ WHERE status IN ('ringing','accepted') AND ((caller=$1 AND recipient=$2) OR (caller=$2 AND recipient=$1))`,[req.account.id,req.params.id]);
+ res.json({ok:true});
+}));
+router.delete('/blocks/:id',auth,run(async(req,res)=>{
+ if(!validId(req.params.id))return res.status(400).json({error:'Usuario inválido'});
+ await pool.query('DELETE FROM jsvoice.blocks WHERE blocker=$1 AND blocked=$2',[req.account.id,req.params.id]);
+ res.json({ok:true});
 }));
 router.delete('/friends/:id',auth,run(async(req,res)=>{
  await pool.query('DELETE FROM jsvoice.friendships WHERE (sender=$1 AND recipient=$2) OR (sender=$2 AND recipient=$1)',[req.account.id,req.params.id]);
