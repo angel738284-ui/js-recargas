@@ -3026,6 +3026,25 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
 .footer-note{text-align:center;color:#688186;font-size:12px;margin:20px auto}
 @media(max-width:700px){.platform-grid,.settings-grid{grid-template-columns:1fr}.header{margin-bottom:20px}.hero h2{font-size:22px}.hero{padding:20px}.card{padding:18px}.settings-grid{padding:12px}.live-pill{font-size:11px;padding:6px 8px}.switches{gap:7px}.switchbtn{padding:12px 7px}}
 @media(max-width:360px){.row,.action-row{grid-template-columns:1fr}.switches{grid-template-columns:1fr}.header .brand h1{font-size:17px}}
+.presence{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#151f22;border:1px solid #345246;border-radius:21px;padding:19px 20px;margin:17px 0 18px}
+.presence-eyebrow{font-size:11px;color:#92bca9;font-weight:900;letter-spacing:.09em;margin-bottom:8px}
+.presence-text{min-width:0}
+.presence-text strong{font-size:17px;line-height:1.25;display:block}
+.presence-text p{font-size:12px;line-height:1.45;color:#a7b9b8;margin:7px 0 0}
+.presence-toggle{background:#98e6bc;color:#132318;border-color:#98e6bc;padding:15px 18px;white-space:nowrap;min-width:142px;min-height:52px;font-size:14px}
+.presence.away{border-color:#786a3e;background:#282519}
+.presence.away .presence-toggle{background:#f2c66d;color:#322000;border-color:#f2c66d}
+.presence.away .presence-eyebrow{color:#f2c66d}
+.subadvanced{margin:2px 16px 18px;background:#111b1e;border:1px solid #2c3d41;border-radius:16px;overflow:hidden}
+.subadvanced>summary{cursor:pointer;padding:15px 17px;font-size:14px;font-weight:850;list-style:none}
+.subadvanced>summary::-webkit-details-marker{display:none}
+.subadvanced>summary span{display:block;font-size:12px;font-weight:500;color:#8b9fa1;margin-top:5px}
+.verity-special{padding:14px;border-top:1px solid #28393b;display:grid;gap:10px}
+.verity-special .card{max-width:none;margin:0;background:#172528;padding:13px;border:1px solid #2c4143;border-radius:14px}
+.verity-special .card h2{font-size:15px;margin:0 0 7px}
+.verity-special .card p{font-size:12px;line-height:1.4}
+.verity-special button{width:100%;margin-top:7px}
+@media(max-width:500px){.presence{flex-direction:column;align-items:stretch;padding:17px}.presence-toggle{width:100%}}
 </style>
 </head>
 <body>
@@ -3049,7 +3068,17 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
     <div id="quickStatus" class="platform-footnote">Para que se escuche en el directo, agregá Verity como fuente web en PRISM y activá su audio.</div>
   </section>
 
-  <div class="main-label">01 · CONECTÁ TU TRANSMISIÓN</div>
+  <!-- JS_LIVE_PRESENCE_HOME_V1 -->
+  <section class="presence" aria-label="Estado de JS">
+    <div class="presence-text">
+      <div class="presence-eyebrow">TU ESTADO EN DIRECTO</div>
+      <strong id="presenceTitle">Consultando estado de JS…</strong>
+      <p id="presenceDescription">Verity adapta sus respuestas según estés presente o ausente.</p>
+    </div>
+    <button id="toggleAway" class="presence-toggle" type="button">Consultando…</button>
+  </section>
+
+  <div class="main-label">CONECTÁ TU TRANSMISIÓN</div>
   <div class="platform-grid">
     <section class="card">
       <div class="platform-head"><div class="platform-icon yt-icon">▶</div><div><h2>YouTube Live</h2><div class="platform-sub">Enlace del video en vivo</div></div></div>
@@ -3099,7 +3128,7 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
           <option value="medium" selected>Media · recomendada</option>
           <option value="high">Alta · responde más</option>
         </select>
-        <button id="toggleAway">⏳ JS ya regresa</button>
+        <div class="platform-footnote">El estado de JS se controla directamente desde Inicio.</div>
         <button id="toggleReaderName">👤 TikTok: decir nombre ON</button>
         <button id="youtubeNameToggle">👤 YouTube: decir nombre ON</button>
         <button id="clearReader" class="danger">🧹 Limpiar cola TikTok</button>
@@ -3113,7 +3142,7 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
         <input id="readerTestName" placeholder="Nombre de prueba (opcional)">
         <textarea id="readerTestComment" placeholder="Escribí un comentario para probar"></textarea>
         <button id="readerTestCommentBtn">💬 Probar lectura del comentario</button>
-        <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
+        <p class="platform-footnote">Las funciones especiales de Verity están al final de Ajustes.</p>
         <div id="readerTestStatus" class="activityline">Preparado para las pruebas.</div>
       </div>
 
@@ -3155,6 +3184,12 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
         <div id="result" class="activityline"></div>
       </div>
     </div>
+    <details class="subadvanced" id="verityAdvanced">
+      <summary>🧠 Funciones especiales de Verity <span>Memoria, conversación grupal, juegos y risas</span></summary>
+      <div class="verity-special">
+        <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
+      </div>
+    </details>
   </details>
   <div class="footer-note">JS LIVE · Una sola página para controlar tu transmisión</div>
 </div>
@@ -3285,8 +3320,13 @@ function renderTikTok(s){
   if(s.error)tiktokStatus.textContent+=' · '+s.error;
   toggleAuto.textContent='🤖 Verity responde comentarios: '+(s.autoReply?'ON':'OFF');
   toggleAuto.classList.toggle('on',Boolean(s.autoReply));
-  toggleAway.textContent=s.awayMode?'✅ JS volvió':'⏳ JS ya regresa';
-  toggleAway.classList.toggle('on',Boolean(s.awayMode));
+  toggleAway.textContent=s.awayMode?'✅ JS ya volvió':'⏳ JS no está';
+  document.querySelector('.presence').classList.toggle('away',Boolean(s.awayMode));
+  document.getElementById('presenceTitle').textContent=s.awayMode?'⏳ JS está ausente':'✅ JS está presente';
+  document.getElementById('presenceDescription').textContent=s.awayMode
+    ? 'Verity queda a cargo de conversar con el chat. Tocá el botón cuando regreses.'
+    : 'Si te vas un momento, tocá «JS no está» para dejar a Verity a cargo.';
+  toggleAway.disabled=false;
   toggleReader.textContent='🔊 Verity comentarios: '+(s.readerEnabled?'ON':'OFF');
   toggleReader.classList.toggle('on',Boolean(s.readerEnabled));
   toggleReaderName.textContent='👤 Decir nombre: '+(s.readerIncludeName?'ON':'OFF');
@@ -3352,11 +3392,14 @@ toggleAway.onclick=async()=>{
   try{
     const s=await api('/api/tiktok/away',{enabled});
     renderTikTok(s);
-    tiktokStatus.textContent=enabled
-      ? '⏳ JS está ocupado · Verity queda hablando con el chat'
-      : '✅ JS volvió · Verity volvió al modo normal';
+    try {
+      const y=await api('/api/youtube/options',{awayMode:enabled,autoReply:enabled?true:youtubeLiveState.autoReply});
+      renderYoutube(y);
+    } catch(yErr) {
+      document.getElementById('presenceDescription').textContent='Estado TikTok actualizado; YouTube: '+String(yErr.message||yErr);
+    }
   }catch(e){
-    tiktokStatus.textContent='🔴 '+String(e.message||e);
+    document.getElementById('presenceDescription').textContent='🔴 No se pudo cambiar el estado: '+String(e.message||e);
   }finally{
     toggleAway.disabled=false;
   }
