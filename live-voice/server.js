@@ -3113,7 +3113,7 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
         <input id="readerTestName" placeholder="Nombre de prueba (opcional)">
         <textarea id="readerTestComment" placeholder="Escribí un comentario para probar"></textarea>
         <button id="readerTestCommentBtn">💬 Probar lectura del comentario</button>
-        <button id="dramaTestBtn">😈 Probar voz Drama 3</button>
+        <button id="dramaTestBtn">😈 Probar Verity Drama 3</button>
         <div id="readerTestStatus" class="activityline">Preparado para las pruebas.</div>
       </div>
 
