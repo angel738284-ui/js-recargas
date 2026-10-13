@@ -3315,8 +3315,9 @@ async function refreshTikTok(){
 
 connectTikTok.onclick=async()=>{
   const raw=liveUser.value.trim();
-  const m=raw.match(/tiktok\.com\/@([A-Za-z0-9._]+)/i);
-  const u=m?('@'+m[1]):raw;
+  const marker='tiktok.com/@';
+  const at=raw.toLowerCase().indexOf(marker);
+  const u=at>=0?('@'+raw.slice(at+marker.length).split('/')[0].split('?')[0].split('#')[0]):raw;
   if(!u){tiktokStatus.textContent='Pegá un usuario o enlace de TikTok';return;}
   connectTikTok.disabled=true;
   tiktokStatus.textContent='🟡 Conectando con TikTok…';
