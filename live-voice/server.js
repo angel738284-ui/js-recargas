@@ -3117,6 +3117,41 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
     </section>
   </div>
 
+  <!-- JS_LIVE_AVATAR_MUSIC_HOME_V1 -->
+
+  <div class="main-label">TU AVATAR Y MÚSICA</div>
+  <div class="platform-grid">
+    <section class="card">
+      <div class="platform-head"><div class="platform-icon tt-icon">JS</div><div><h2>Avatar de JS</h2><div class="platform-sub">Tu personaje en el directo</div></div></div>
+      <div id="jsAvatarStatus" class="statusline">Consultando avatar…</div>
+      <div class="row">
+        <button id="jsAvatarToggle" class="main-action">Mostrar / ocultar</button>
+        <button id="jsAvatarSettings" class="ghost">🎭 Personalizar</button>
+      </div>
+      <div class="row">
+        <button id="jsAvatarCopy" class="ghost">📋 Copiar para PRISM</button>
+        <button id="jsVoiceControl" class="ghost">🎙️ Voz JS</button>
+      </div>
+      <div class="platform-footnote">El avatar reacciona cuando habla JS. Su fuente web para PRISM es independiente de Verity.</div>
+    </section>
+    <section class="card">
+      <div class="platform-head"><div class="platform-icon yt-icon">♫</div><div><h2>JS Music</h2><div class="platform-sub">Música de tu transmisión</div></div></div>
+      <div id="jsMusicStatus" class="statusline">Consultando canciones…</div>
+      <div class="row">
+        <button id="jsMusicPrev" class="ghost">⏮ Anterior</button>
+        <button id="jsMusicNext" class="ghost">Siguiente ⏭</button>
+      </div>
+      <button id="jsMusicPlay" class="main-action" style="width:100%;margin-top:10px">▶ Reproducir</button>
+      <label class="field-label" for="jsMusicVolume" style="margin-top:17px">Volumen: <span id="jsMusicVolumeLabel">22%</span></label>
+      <input id="jsMusicVolume" type="range" min="0" max="100" value="22" style="padding:8px 0;accent-color:#a3f2c8">
+      <div class="row">
+        <button id="jsMusicSettings" class="ghost">🎵 Biblioteca</button>
+        <button id="jsMusicCopy" class="ghost">📋 Para PRISM</button>
+      </div>
+      <div class="platform-footnote">La música se escucha en el LIVE si agregás la fuente web /music en PRISM.</div>
+    </section>
+  </div>
+
   <details class="advanced" id="advancedSettings">
     <summary><div>⚙️ Ajustes y herramientas <span>Pruebas de voz, nombres, regalos y enlaces adicionales</span></div></summary>
     <div class="settings-grid">
@@ -3197,6 +3232,68 @@ button.on,.switchbtn.on{background:#1d4334;border-color:#367c5e;color:#b4f1cd}
 <audio id="audio" playsinline></audio>
 <script>
 const KEY=${JSON.stringify(key)};
+
+const jsAvatarStatus=document.getElementById('jsAvatarStatus');
+const jsAvatarToggle=document.getElementById('jsAvatarToggle');
+const jsMusicStatus=document.getElementById('jsMusicStatus');
+const jsMusicPlay=document.getElementById('jsMusicPlay');
+const jsMusicVolume=document.getElementById('jsMusicVolume');
+const jsMusicVolumeLabel=document.getElementById('jsMusicVolumeLabel');
+let jsAvatarState=null,jsMusicState=null;
+const gotoJS=(path)=>{location.href=path+'?key='+encodeURIComponent(KEY);};
+async function copyJSUrl(path,target){
+  const url=location.origin+path;
+  try{await navigator.clipboard.writeText(url);target.textContent='✅ Enlace copiado para PRISM';}
+  catch(e){target.textContent='Copiá el enlace: '+url;}
+}
+function paintJSAvatar(s){
+  jsAvatarState=s;
+  jsAvatarStatus.textContent=s.visible?'🟢 Avatar de JS visible':'⚪ Avatar de JS oculto';
+  jsAvatarToggle.textContent=s.visible?'🙈 Ocultar avatar':'👀 Mostrar avatar';
+  jsAvatarToggle.classList.toggle('on',Boolean(s.visible));
+}
+function paintJSMusic(m){
+  jsMusicState=m;
+  const track=m.track;
+  const name=track&&track.name?String(track.name):'Sin canción seleccionada';
+  jsMusicStatus.textContent=(m.playing?'🎶 Reproduciendo: ':'⏸️ Pausado: ')+name;
+  jsMusicPlay.textContent=m.playing?'⏸ Pausar música':'▶ Reproducir música';
+  const vol=Math.round(Math.max(0,Math.min(1,Number(m.volume)||0))*100);
+  if(document.activeElement!==jsMusicVolume)jsMusicVolume.value=String(vol);
+  jsMusicVolumeLabel.textContent=vol+'%';
+}
+async function refreshJSTools(){
+  try{paintJSAvatar(await api('/api/avatar/state',undefined,'GET'));}
+  catch(e){jsAvatarStatus.textContent='⚠️ Avatar: '+String(e.message||e);}
+  try{paintJSMusic(await api('/api/music/state',undefined,'GET'));}
+  catch(e){jsMusicStatus.textContent='⚠️ Música: '+String(e.message||e);}
+}
+async function controlJSMusic(action,extra){
+  try{
+    jsMusicPlay.disabled=true;
+    const m=await api('/api/music/control',Object.assign({action},extra||{}));
+    paintJSMusic(m);
+  }catch(e){jsMusicStatus.textContent='⚠️ '+String(e.message||e);}
+  finally{jsMusicPlay.disabled=false;}
+}
+jsAvatarToggle.onclick=async()=>{
+  try{jsAvatarToggle.disabled=true;paintJSAvatar(await api('/api/avatar/control',{action:'visible',visible:!(jsAvatarState&&jsAvatarState.visible)}));}
+  catch(e){jsAvatarStatus.textContent='⚠️ '+String(e.message||e);}
+  finally{jsAvatarToggle.disabled=false;}
+};
+document.getElementById('jsAvatarSettings').onclick=()=>gotoJS('/avatar-control');
+document.getElementById('jsVoiceControl').onclick=()=>gotoJS('/control');
+document.getElementById('jsAvatarCopy').onclick=()=>copyJSUrl('/avatar?v=human2',jsAvatarStatus);
+document.getElementById('jsMusicSettings').onclick=()=>gotoJS('/music-control');
+document.getElementById('jsMusicCopy').onclick=()=>copyJSUrl('/music',jsMusicStatus);
+jsMusicPlay.onclick=()=>controlJSMusic(jsMusicState&&jsMusicState.playing?'pause':'play');
+document.getElementById('jsMusicPrev').onclick=()=>controlJSMusic('prev');
+document.getElementById('jsMusicNext').onclick=()=>controlJSMusic('next');
+jsMusicVolume.oninput=()=>{jsMusicVolumeLabel.textContent=jsMusicVolume.value+'%';};
+jsMusicVolume.onchange=()=>controlJSMusic('volume',{volume:Number(jsMusicVolume.value)/100});
+refreshJSTools();
+setInterval(refreshJSTools,6000);
+
 const quickCopyPrism=document.getElementById('quickCopyPrism');
 const quickOpenPrism=document.getElementById('quickOpenPrism');
 const quickStatus=document.getElementById('quickStatus');
