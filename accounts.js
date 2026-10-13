@@ -11,6 +11,7 @@ const pool = database ? new pg.Pool({connectionString:database,max:3,
   connectionTimeoutMillis:6500,idleTimeoutMillis:20000,
   ssl:database.includes('localhost')?undefined:{rejectUnauthorized:false}}):null;
 const router=Router();
+let verifiedAdminId='';
 const schema = `
 CREATE SCHEMA IF NOT EXISTS jsvoice;
 CREATE TABLE IF NOT EXISTS jsvoice.accounts (
@@ -25,6 +26,11 @@ CREATE TABLE IF NOT EXISTS jsvoice.accounts (
 );
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS banner BYTEA;
 ALTER TABLE jsvoice.accounts ADD COLUMN IF NOT EXISTS username VARCHAR(22);
+CREATE TABLE IF NOT EXISTS jsvoice.app_badges(
+ account_id UUID PRIMARY KEY REFERENCES jsvoice.accounts(id) ON DELETE CASCADE,
+ kind VARCHAR(16) NOT NULL CHECK(kind IN ('ADM')),
+ granted_at TIMESTAMPTZ DEFAULT now()
+);
 UPDATE jsvoice.accounts SET username='js_'||lower(friend_code) WHERE username IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS jsvoice_account_username_unique ON jsvoice.accounts(lower(username));
 CREATE TABLE IF NOT EXISTS jsvoice.presence (
@@ -72,6 +78,15 @@ async function ensureDatabase(){
   if(!pool)throw Object.assign(new Error('Falta conectar una base de datos permanente'),{status:503});
   if(initialized)return;
   await pool.query(schema);
+  // Assign the single display badge to the already registered, verified
+  // account owning @jsff. It is tied to its immutable account UUID, not to
+  // an editable screen name or client-supplied role. Never grants privileges.
+  await pool.query(`INSERT INTO jsvoice.app_badges(account_id,kind)
+    SELECT id,'ADM' FROM jsvoice.accounts WHERE lower(username)='jsff'
+    AND NOT EXISTS(SELECT 1 FROM jsvoice.app_badges WHERE kind='ADM')
+    ORDER BY created_at ASC LIMIT 1 ON CONFLICT DO NOTHING`);
+  const badge=await pool.query("SELECT account_id FROM jsvoice.app_badges WHERE kind='ADM' LIMIT 1");
+  verifiedAdminId=badge.rows[0]?.account_id||'';
   initialized=true;
 }
 const safeName=s=>String(s||'').trim().replace(/[<>\\\u0000-\u001f]/g,'').slice(0,32);
@@ -89,7 +104,7 @@ function searchLimit(account){
 }
 const hash=t=>createHash('sha256').update(t).digest('hex');
 const portrait=a=>a.photo?'/api/account/accounts/'+a.id+'/photo':a.google_photo;
-const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),banner:(a.banner||a.has_banner)?'/api/account/accounts/'+a.id+'/banner':null,bio:a.bio,friendCode:a.friend_code,username:a.username||('js_'+String(a.friend_code||'').toLowerCase())});
+const publicAccount=a=>({id:a.id,name:a.display_name,avatar:a.settings?.avatar||'🎮',photo:portrait(a),banner:(a.banner||a.has_banner)?'/api/account/accounts/'+a.id+'/banner':null,bio:a.bio,friendCode:a.friend_code,username:a.username||('js_'+String(a.friend_code||'').toLowerCase()),isAppAdmin:a.id===verifiedAdminId});
 const selfAccount=a=>({...publicAccount(a),email:a.email,preferences:a.settings||{}});
 const fail=(res,e)=>res.status(e.status||500).json({error:e.status?e.message:'Error del servidor'});
 const run=fn=>async(req,res)=>{try{await fn(req,res)}catch(e){console.error('Cuentas JS VOICE:',e.message);fail(res,e)}};
@@ -270,6 +285,7 @@ router.get('/friends/search',auth,run(async(req,res)=>{
  res.set('Cache-Control','private, no-store');
  res.json({results:q.rows.map(a=>({
   id:a.id,name:a.display_name,username:a.username,friendCode:a.friend_code,
+  isAppAdmin:a.id===verifiedAdminId,
   avatar:a.settings?.avatar||'🎮',photo:a.has_photo?'/api/account/accounts/'+a.id+'/photo':a.google_photo,
   relation:!a.friend_status?'none':a.friend_status==='accepted'?'friends':a.friend_status==='rejected'?'rejected':a.friend_sender===req.account.id?'sent':'received'
  }))});
@@ -380,7 +396,7 @@ router.get('/messages/conversations',auth,run(async(req,res)=>{
   AND NOT EXISTS(SELECT 1 FROM jsvoice.blocks b WHERE (b.blocker=$1 AND b.blocked=a.id) OR (b.blocked=$1 AND b.blocker=a.id))
   ORDER BY a.display_name LIMIT 150`,[req.account.id]);
  res.json({conversations:q.rows.map(x=>({id:x.id,name:x.display_name,friendCode:x.friend_code,
- avatar:x.settings?.avatar||'🎮',lastMessage:x.last_message||'',unread:x.unread}))});
+ avatar:x.settings?.avatar||'🎮',isAppAdmin:x.id===verifiedAdminId,lastMessage:x.last_message||'',unread:x.unread}))});
 }));
 router.get('/messages/:id',auth,run(async(req,res)=>{
  if(!await friendAllowed(req.account.id,req.params.id))return res.status(403).json({error:'Chat no disponible'});
