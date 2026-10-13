@@ -207,7 +207,12 @@ router.patch('/me/username',auth,run(async(req,res)=>{
  }
 }));
 router.patch('/me',auth,run(async(req,res)=>{
- const name=safeName(req.body?.name);
+ // This is a partial update: keep the saved display name when
+ // changing only the biography, avatar or account preferences.
+ // Still validate a name that was explicitly submitted.
+ const name=Object.prototype.hasOwnProperty.call(req.body||{},'name')
+  ? safeName(req.body.name)
+  : req.account.display_name;
  const bio=typeof req.body?.bio==='string'?req.body.bio.trim().slice(0,160):req.account.bio;
  const avatar=AVATARS.has(req.body?.avatar)?req.body.avatar:req.account.settings?.avatar||'🎮';
  const pref=req.body?.preferences||{};
