@@ -161,7 +161,7 @@ router.post('/google',run(async(req,res)=>{
   const newId=randomUUID();
   const inserted=await pool.query(`INSERT INTO jsvoice.accounts
     (id,google_sub,display_name,google_name,email,google_photo,friend_code,username)
-    VALUES($1,$2,$3,$3,$4,$5,$6,'js_'||lower($6))
+    VALUES($1,$2,$3,$3,$4,$5,$6::varchar(10),'js_'||lower($6::varchar(10)))
     ON CONFLICT(google_sub) DO UPDATE SET google_name=EXCLUDED.google_name,
     email=EXCLUDED.email,google_photo=EXCLUDED.google_photo,updated_at=now()
     RETURNING *`,[newId,payload.sub,display,payload.email,photo,code()]);
