@@ -295,106 +295,144 @@ async function revisarAlertaSaldo(saldo) {
 // ======================================================
 
 async function verificarJugadorFreeFire(userid) {
-  const uid = encodeURIComponent(userid);
+  const uid =
+    String(userid || "").trim();
 
-  // 1) Verificador gratuito principal
-  try {
-    const response = await fetch(
-      "https://freefireapis.lat/info-player?uid=" + uid + "&region=SAC",
-      {
-        method: "GET",
-        headers: { "Accept": "application/json" }
-      }
-    );
-
-    let data;
+  // 1) Verificador principal: EpinBy
+  if (process.env.EPINBY_API_KEY) {
     try {
-      data = await response.json();
-    } catch {
-      data = {};
-    }
-
-    const basicInfo =
-      data?.resultado?.basicInfo ??
-      data?.result?.basicInfo ??
-      data?.basicInfo ??
-      null;
-
-    const nickname =
-      basicInfo?.nickname ??
-      data?.resultado?.nickname ??
-      data?.nickname ??
-      null;
-
-    const accountId =
-      basicInfo?.accountId ??
-      data?.resultado?.accountId ??
-      data?.accountId ??
-      null;
-
-    const error =
-      data?.error ??
-      data?.message ??
-      null;
-
-    const noEncontrado =
-      response.status === 404 &&
-      (
-        String(error || "").toUpperCase().includes("PLAYER_NOT_FOUND") ||
-        String(error || "").toLowerCase().includes("not found")
+      const response = await fetch(
+        "https://epinby.com/api/v1/validate-player",
+        {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-API-KEY":
+              process.env.EPINBY_API_KEY
+          },
+          body: JSON.stringify({
+            product_id: 2484,
+            player_id: uid
+          })
+        }
       );
 
-    if (noEncontrado) {
-      return {
-        ok: true,
-        encontrado: false,
-        status: 404,
-        nickname: null,
-        accountId: null,
-        data
-      };
-    }
+      let data;
 
-    if (
-      response.ok &&
-      data?.success !== false &&
-      data?.exito !== false &&
-      nickname
-    ) {
-      return {
-        ok: true,
-        encontrado: true,
-        status: response.status,
-        nickname,
-        accountId,
-        data
-      };
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
+
+      const nickname =
+        data?.data?.nickname ??
+        data?.data?.player_name ??
+        data?.nickname ??
+        data?.player_name ??
+        null;
+
+      const mensaje =
+        data?.message ??
+        data?.error ??
+        data?.data?.message ??
+        "";
+
+      const noEncontrado =
+        response.status === 404 ||
+        (
+          data?.success === false &&
+          (
+            String(mensaje)
+              .toLowerCase()
+              .includes("not found") ||
+            String(mensaje)
+              .toLowerCase()
+              .includes("invalid player") ||
+            String(mensaje)
+              .toLowerCase()
+              .includes("player not")
+          )
+        );
+
+      if (noEncontrado) {
+        return {
+          ok: true,
+          encontrado: false,
+          status:
+            response.status || 404,
+          nickname: null,
+          accountId: null,
+          data
+        };
+      }
+
+      if (
+        response.ok &&
+        data?.success !== false &&
+        nickname
+      ) {
+        return {
+          ok: true,
+          encontrado: true,
+          status: response.status,
+          nickname,
+          accountId: uid,
+          region:
+            data?.data?.actual_region ??
+            data?.data?.region ??
+            null,
+          nicknameVerified:
+            data?.data
+              ?.nickname_verified === true,
+          data
+        };
+      }
+
+      console.error(
+        "EpinBy no validó jugador:",
+        response.status,
+        data?.message ||
+        data?.error ||
+        "respuesta sin nickname"
+      );
+
+    } catch (error) {
+      console.error(
+        "Verificador EpinBy:",
+        error
+      );
     }
-  } catch (error) {
-    console.error("Verificador principal Free Fire:", error);
   }
 
-  // 2) Respaldo Volsever
+  // 2) Respaldo: Volsever
   if (!process.env.VOLSEVER_API_KEY) {
-    throw new Error("No hay verificador de respaldo disponible");
+    throw new Error(
+      "No hay verificador de jugador disponible"
+    );
   }
 
   const respaldo = await fetch(
     "https://gate.volsever.com/garena/api/v1/pagostore/free-fire/check-products" +
-    "?id=" + uid +
+    "?id=" +
+    encodeURIComponent(uid) +
     "&region=SAC",
     {
       method: "GET",
       headers: {
         "Accept": "application/json",
-        "X-API-Key": process.env.VOLSEVER_API_KEY
+        "X-API-Key":
+          process.env.VOLSEVER_API_KEY
       }
     }
   );
 
   let dataRespaldo;
+
   try {
-    dataRespaldo = await respaldo.json();
+    dataRespaldo =
+      await respaldo.json();
   } catch {
     dataRespaldo = {};
   }
@@ -403,7 +441,9 @@ async function verificarJugadorFreeFire(userid) {
     respaldo.status === 404 ||
     (
       dataRespaldo?.status === false &&
-      Number(dataRespaldo?.code) === 404
+      Number(
+        dataRespaldo?.code
+      ) === 404
     )
   ) {
     return {
@@ -434,7 +474,7 @@ async function verificarJugadorFreeFire(userid) {
       accountId:
         dataRespaldo?.data?.user_id ??
         dataRespaldo?.user_id ??
-        userid,
+        uid,
       data: dataRespaldo
     };
   }
@@ -444,6 +484,7 @@ async function verificarJugadorFreeFire(userid) {
     "Los verificadores de Free Fire no respondieron correctamente"
   );
 }
+
 // ======================================================
 // PROMOS RD - VOLSEVER
 // ======================================================
