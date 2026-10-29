@@ -1,8 +1,8 @@
 {
   "packageName": "com.jsfamily.recargas",
-  "versionCode": 14,
-  "versionName": "0.1.13",
-  "apkUrl": "https://github.com/angel738284-ui/js-recargas/releases/download/v0.1.13/JS-RECARGAS-v0.1.13.apk",
-  "sha256": "461c5af2996ff5649be372a47ef70ea60ea699ec4384bca6da9dc378c1308833",
+  "versionCode": 15,
+  "versionName": "0.1.14",
+  "apkUrl": "https://github.com/angel738284-ui/js-recargas/releases/download/v0.1.14/JS-RECARGAS-v0.1.14.apk",
+  "sha256": "f43bb8baaa66e31a12d751192ce8bbcbb1541023ebdbafc3c34d523813e1ef4e",
   "notes": "Novedades y mejoras de JS Recargas. La descarga se verifica antes de instalarla."
 }
